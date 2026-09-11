@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网页版我的世界</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="item-hint"></div>
+  <div id="minebar"><div id="minefill"></div></div>
+  <div id="survival-bar">
+    <div id="health-bar"></div>
+    <div id="armor-bar"></div>
+    <div id="hunger-bar"></div>
+  </div>
+  <canvas id="hand" width="72" height="72"></canvas>
+  <div id="hotbar"></div>
+  <div id="debug"></div>
+  <div id="coord"></div>
+</div>
+
+<div id="hurt-flash"></div>
+<div id="sleep"></div>
+<div id="screen" class="hidden"><div id="panel"></div></div>
+<div id="death" class="hidden">
+  <div class="death-box">
+    <h2>你死了</h2>
+    <button id="respawn-btn">重生</button>
+  </div>
+</div>
+<div id="cursor-stack"></div>
+
+<div id="start">
+  <h1>网页版 我的世界</h1>
+  <div class="keys">
+    <b>W A S D</b><span>前后左右移动</span>
+    <b>鼠标</b><span>转动视角</span>
+    <b>空格</b><span>跳跃（水中上浮）</span>
+    <b>Shift</b><span>潜行</span>
+    <b>双击 W</b><span>疾跑（松开 W 停下）</span>
+    <b>左键长按</b><span>挖掘方块 / 攻击生物</span>
+    <b>右键</b><span>放置方块 / 打开工作台、熔炉</span>
+    <b>床</b><span>夜里右键睡觉，跳过黑夜到早上，并设重生点</span>
+    <b>E</b><span>打开背包（含 2×2 合成）</span>
+    <b>1 ~ 9 / 滚轮</b><span>切换快捷栏</span>
+    <b>Q</b><span>丢弃一个物品</span>
+    <b>F</b><span>切换飞行模式</span>
+    <b>R</b><span>循环切换渲染距离（卡就按它）</span>
+    <b>O</b><span>开关流畅模式（关环境光遮蔽）</span>
+    <b>Esc</b><span>释放鼠标</span>
+  </div>
+  <div class="rd-row">
+    渲染距离：
+    <select id="rd">
+      <option value="2">极近（2）· 最流畅</option>
+      <option value="3">近（3）</option>
+      <option value="4" selected>标准（4）</option>
+      <option value="6">远（6）</option>
+      <option value="8">超远（8）· 要独显</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="noao"> 流畅模式（关环境光遮蔽，建图更快）</label>
+  </div>
+  <button id="start-btn" disabled>正在加载原版贴图…</button>
+  <button id="wipe-btn" class="hidden">清档重来（删掉存档，从头开始）</button>
+  <p id="load-tip" class="tip">正在从本地 textures/ 目录加载 Minecraft 1.20.4 原版贴图…</p>
+  <p class="tip">
+    觉得卡就先降渲染距离，或勾上流畅模式；游戏里随时按 <b>R</b> 循环切换渲染距离，按 <b>O</b> 开关流畅模式。<br>
+    生存链路：撸树得原木 → 木板 → 木棍 → 工作台 → 木镐 → 挖石头得圆石 → 石镐 → 挖铁矿 → 熔炉烧成铁锭 → 铁镐 → 挖钻石矿 → 钻石镐。<br>
+    石头一类方块必须用镐才掉落；铁矿要石镐以上，金矿/钻石矿要铁镐以上。镐越好，挖得越快。<br>
+    <b>生存</b>：疾跑和跳跃会消耗饥饿，饥饿掉光会持续掉血；饥饿满时会自动回血。摔落超过 3 格、水里憋气超过 15 秒都会扣血。<br>
+    砍橡树树叶有几率掉<b>苹果</b>，拿着苹果右键吃掉可以回饥饿（开局送 3 个）。血量归零会死亡，回出生点重生。<br>
+    <b>生物</b>：白天刷猪牛羊鸡（打一下会掉生肉，羊毛/皮革能捡），晚上刷僵尸、骷髅、苦力怕。左键可以打生物，手上拿镐/斧/铲伤害更高（斧最高）。<br>
+    生肉丢进熔炉加燃料能烧成熟肉，回的饥饿多得多；腐肉也能吃，但回得少。僵尸和骷髅白天在太阳下会自燃。
+  </p>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,390 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b1020;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: #fff;
+  user-select: none;
+}
+
+#game { display: block; width: 100%; height: 100%; }
+
+.hidden { display: none !important; }
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+}
+#crosshair::before, #crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+}
+#crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
+#crosshair::after { top: 9px; left: 0; height: 2px; width: 20px; }
+
+#survival-bar {
+  position: absolute;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 428px;
+  display: flex;
+  justify-content: space-between;
+}
+
+#health-bar,
+#armor-bar,
+#hunger-bar {
+  display: flex;
+}
+
+.hud-icon {
+  width: 18px;
+  height: 18px;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+
+.hud-icon.flip {
+  transform: scaleX(-1);
+}
+
+#hand {
+  position: absolute;
+  right: 34px;
+  bottom: 92px;
+  width: 72px;
+  height: 72px;
+  image-rendering: pixelated;
+  transform-origin: 50% 100%;
+  filter: drop-shadow(2px 3px 0 rgba(0, 0, 0, 0.35));
+}
+
+#hotbar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+}
+
+.slot {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  background: #8b8b8b;
+  border: 2px solid #373737;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  image-rendering: pixelated;
+}
+.slot canvas {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+}
+.slot .cnt {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 1px 1px 0 #000;
+}
+.slot.sel {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #000, 0 0 8px rgba(255, 255, 255, 0.5);
+}
+
+#item-hint {
+  position: absolute;
+  bottom: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 15px;
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.25s;
+  white-space: nowrap;
+}
+
+#minebar {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 26px);
+  transform: translateX(-50%);
+  width: 120px;
+  height: 7px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  display: none;
+}
+#minefill {
+  height: 100%;
+  width: 0%;
+  background: #e8e8e8;
+}
+
+#debug, #coord {
+  position: absolute;
+  left: 8px;
+  font-size: 12px;
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+#debug { top: 8px; }
+#coord { top: 28px; }
+
+#death {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(90, 12, 12, 0.55);
+  z-index: 60;
+}
+
+.death-box {
+  text-align: center;
+  color: #fff;
+}
+
+.death-box h2 {
+  margin: 0 0 24px;
+  font-size: 46px;
+  letter-spacing: 2px;
+  text-shadow: 0 4px 0 #4a0d0d;
+}
+
+#respawn-btn {
+  padding: 10px 28px;
+  font-size: 18px;
+  font-family: inherit;
+  color: #fff;
+  background: #8b3a3a;
+  border: 2px solid #f0d8d8;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#respawn-btn:hover {
+  background: #a84848;
+}
+
+#screen {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+#panel {
+  background: #c6c6c6;
+  border: 3px solid #373737;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.25), inset 2px 2px 0 rgba(255, 255, 255, 0.5);
+  padding: 14px 16px 16px;
+  color: #1a1a1a;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #2b2b2b;
+}
+
+.craft-area, .furnace-area {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.grid { display: grid; gap: 3px; }
+.grid.g2 { grid-template-columns: repeat(2, 44px); }
+.grid.g3 { grid-template-columns: repeat(3, 44px); }
+
+.arrow {
+  width: 34px;
+  height: 20px;
+  background: linear-gradient(90deg, transparent 0 40%, #5a5a5a 40% 100%);
+  position: relative;
+}
+.arrow::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -6px;
+  border-left: 12px solid #5a5a5a;
+  border-top: 16px solid transparent;
+  border-bottom: 16px solid transparent;
+}
+
+.furnace-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.furnace-bars {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.flame {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #555;
+  background: #6b6b6b;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+.flame i { display: block; width: 100%; height: 0%; background: #e07b1f; }
+.arrow-f {
+  width: 60px;
+  height: 14px;
+  border: 1px solid #555;
+  background: #6b6b6b;
+}
+.arrow-f i { display: block; height: 100%; width: 0%; background: #8ecf5a; }
+
+.inv-main {
+  display: grid;
+  grid-template-columns: repeat(9, 44px);
+  gap: 3px;
+  margin-bottom: 10px;
+}
+.inv-hotbar {
+  display: grid;
+  grid-template-columns: repeat(9, 44px);
+  gap: 3px;
+}
+
+#cursor-stack {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  display: none;
+}
+#cursor-stack canvas {
+  width: 34px;
+  height: 34px;
+  image-rendering: pixelated;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.6));
+}
+#cursor-stack .cnt {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  font-size: 13px;
+  font-weight: 700;
+  text-shadow: 1px 1px 0 #000;
+}
+
+#start {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 22, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  gap: 14px;
+}
+#start h1 { font-size: 34px; letter-spacing: 2px; }
+#start .keys {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 4px 18px;
+  font-size: 14px;
+  color: #cdd6e6;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 14px 20px;
+  border-radius: 6px;
+}
+#start .keys b { color: #ffd479; font-weight: 600; }
+#start button {
+  margin-top: 6px;
+  padding: 10px 26px;
+  font-size: 16px;
+  background: #4c8d3f;
+  color: #fff;
+  border: 2px solid #2f5c26;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+#start button:hover { background: #59a44a; }
+#start #wipe-btn {
+  background: #6b3a3a;
+  border-color: #4a2626;
+  font-size: 13px;
+  padding: 6px 16px;
+}
+#start #wipe-btn:hover { background: #8a4a4a; }
+#start .rd-row { font-size: 14px; color: #cdd6e6; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+#start .chk { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: #ffd479; }
+#start .chk input { cursor: pointer; }
+#start select { font-family: inherit; font-size: 14px; padding: 2px 6px; }
+#start .tip { font-size: 12px; color: #8e9bb3; max-width: 520px; text-align: center; line-height: 1.6; }
+
+#hurt-flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 55;
+  opacity: 0;
+  box-shadow: inset 0 0 130px 40px rgba(150, 0, 0, 0.6);
+  transition: opacity 0.35s ease-out;
+}
+#hurt-flash.on { opacity: 1; transition: none; }
+
+#sleep {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background: #000;
+  opacity: 0;
+  transition: opacity 2.8s ease-in;
+}
+#sleep.on { opacity: 1; transition: opacity 2.8s ease-in; }
+
+.inv-body { display: flex; gap: 12px; align-items: flex-start; }
+.inv-armor { display: flex; flex-direction: column; gap: 3px; }
+.inv-main { margin-bottom: 0; }
+.slot.armor-slot {
+  background-size: 32px 32px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
