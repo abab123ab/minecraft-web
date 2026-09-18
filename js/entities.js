@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.js';
 import { ITEMS, itemIconCanvas } from './items.js';
 import { isSolid } from './blocks.js';
-import { HEIGHT } from './world.js';
+import { HEIGHT } from './worlddef.js';
 
 const GRAVITY = 24;
 const PICKUP_DELAY = 0.4;

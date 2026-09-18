@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
-import { HEIGHT } from './world.js';
+import { HEIGHT } from './worlddef.js';
 
 export const P_WIDTH = 0.6;
 export const P_HEIGHT = 1.8;

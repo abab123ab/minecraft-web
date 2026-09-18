@@ -1,4 +1,4 @@
-import { CHUNK } from './world.js';
+import { CHUNK } from './worlddef.js';
 
 export const SAVE_KEY = 'mcweb.save.v1';
 const VERSION = 1;

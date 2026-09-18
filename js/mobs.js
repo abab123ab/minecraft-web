@@ -1,6 +1,7 @@
 import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
-import { HEIGHT, terrainHeight } from './world.js';
+import { HEIGHT } from './worlddef.js';
+import { terrainHeight } from './worldgen.js';
 import { mobArt } from './mobtex.js';
 
 const GRAVITY = 24;
