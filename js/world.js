@@ -60,8 +60,6 @@ export function terrainHeight(x, z) {
   return v;
 }
 
-export const BIOMES = ['plains', 'forest', 'desert', 'snowy', 'mountains'];
-
 export function biomeAt(x, z) {
   const key = ck(x, z);
   const c = bCache.get(key);

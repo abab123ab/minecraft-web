@@ -76,8 +76,6 @@ def('bed', {
 });
 
 export function isSolid(id) { return BLOCKS[id].solid; }
-export function isOpaque(id) { return BLOCKS[id].opaque; }
-export function isTransparent(id) { return BLOCKS[id].transparent; }
 export function isLiquid(id) { return BLOCKS[id].liquid; }
 
 export const TOOL_MATERIALS = {

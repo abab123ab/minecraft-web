@@ -3,7 +3,6 @@ import { TILE_INDEX } from './textures.js';
 
 export const ITEMS = [];
 export const ITEM_BY_KEY = {};
-export const EMPTY = 0;
 
 ITEMS.push({ id: 0, key: 'empty', label: '', blockId: 0, stack: 1, tile: null, tool: null, fuel: 0 });
 
@@ -99,7 +98,6 @@ const ARMOR_SLOTS = [
   { key: 'boots', label: '靴子' }
 ];
 export const ARMOR_SLOT_KEYS = ARMOR_SLOTS.map((s) => s.key);
-export const ARMOR_SLOT_LABELS = ARMOR_SLOTS.map((s) => s.label);
 
 for (const mat in ARMOR_MATERIALS) {
   const m = ARMOR_MATERIALS[mat];
@@ -115,7 +113,6 @@ for (const mat in ARMOR_MATERIALS) {
 }
 
 export function itemId(key) { return ITEM_BY_KEY[key].id; }
-export function itemByKey(key) { return ITEM_BY_KEY[key]; }
 
 export function armorStats(armor) {
   let points = 0;

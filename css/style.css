@@ -41,11 +41,24 @@ html, body {
 #survival-bar {
   position: absolute;
   bottom: 64px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 428px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  max-width: calc(100vw - 16px);
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 10px;
+}
+
+@media (max-width: 620px) {
+  #survival-bar { gap: 4px 6px; }
+  #survival-bar .hud-icon { width: 14px; height: 14px; }
+}
+
+@media (max-width: 460px) {
+  #survival-bar .hud-icon { width: 11px; height: 11px; }
 }
 
 #health-bar,

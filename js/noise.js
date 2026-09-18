@@ -1,13 +1,3 @@
-export function makeRng(seed) {
-  let s = seed >>> 0;
-  return function () {
-    s ^= s << 13; s >>>= 0;
-    s ^= s >>> 17;
-    s ^= s << 5; s >>>= 0;
-    return s / 4294967296;
-  };
-}
-
 export function hash2(x, y, seed) {
   let h = (x | 0) * 374761393 + (y | 0) * 668265263 + (seed | 0) * 2147483647;
   h = (h ^ (h >>> 13)) * 1274126177;
@@ -79,17 +69,6 @@ export function fbm2(x, y, octaves, lacunarity, gain) {
   let amp = 1, freq = 1, sum = 0, norm = 0;
   for (let i = 0; i < octaves; i++) {
     sum += perlin2(x * freq, y * freq) * amp;
-    norm += amp;
-    amp *= gain;
-    freq *= lacunarity;
-  }
-  return sum / norm;
-}
-
-export function fbm3(x, y, z, octaves, lacunarity, gain) {
-  let amp = 1, freq = 1, sum = 0, norm = 0;
-  for (let i = 0; i < octaves; i++) {
-    sum += perlin3(x * freq, y * freq, z * freq) * amp;
     norm += amp;
     amp *= gain;
     freq *= lacunarity;

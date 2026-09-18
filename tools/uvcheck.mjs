@@ -59,21 +59,15 @@ function decode(file) {
 }
 
 
-const UV = {
-  pig:      { head: [8, 8, 8, 8],  body: [36, 16, 10, 16], leg: [4, 20, 4, 6] },
-  cow:      { head: [8, 8, 8, 8],  body: [30, 16, 10, 16], leg: [4, 20, 4, 6] },
-  sheep:    { head: [8, 8, 8, 8],  body: [34, 16, 8, 14],  leg: [4, 20, 4, 6] },
-  chicken:  { head: [4, 4, 4, 6],  body: [6, 15, 6, 8],    leg: [2, 20, 2, 5] },
-  zombie:   { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],  leg: [4, 20, 4, 12] },
-  skeleton: { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],  leg: [4, 20, 4, 12] },
-  creeper:  { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],  leg: [4, 20, 4, 6] }
-};
-const dir = '../textures/entity/';
-for (const k in UV) {
-  const { w, h, alpha, rgb } = decode(dir + k + '.png');
+const src = fs.readFileSync(new URL('../js/mobtex.js', import.meta.url), 'utf8');
+const m = src.match(/const PART = (\{[\s\S]*?\n\});/);
+const PART = eval('(' + m[1] + ')');
+const dir = new URL('../textures/entity/', import.meta.url);
+for (const k in PART) {
+  const { w, h, alpha, rgb } = decode(new URL(k + '.png', dir));
   const parts = [];
   for (const part of ['head','body','leg']) {
-    const [x,y,pw,ph] = UV[k][part];
+    const [x,y,pw,ph] = PART[k][part];
     let n=0,tot=0,r=0,g=0,b=0;
     for (let yy=y; yy<y+ph; yy++) for (let xx=x; xx<x+pw; xx++) {
       tot++;
