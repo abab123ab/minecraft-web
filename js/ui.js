@@ -10,11 +10,14 @@ export class UI {
     this.hotbarEl = document.getElementById('hotbar');
     this.hintEl = document.getElementById('item-hint');
     this.cursorEl = document.getElementById('cursor-stack');
+    this.tipEl = document.getElementById('slot-tip');
     this.mode = null;
     this.furnace = null;
     this.slotViews = [];
     this.hotbarViews = [];
     this.hintTimer = 0;
+    this.hover = null;
+    this.mouse = { x: 0, y: 0 };
 
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       const el = this.createSlot('inv', i, '');
@@ -25,12 +28,24 @@ export class UI {
 
     this.panel.addEventListener('mousedown', (e) => this.onSlotMouse(e));
     this.panel.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.panel.addEventListener('mousemove', (e) => {
+      const el = e.target.closest('.slot');
+      this.hover = el ? { area: el.dataset.area, index: parseInt(el.dataset.index, 10) } : null;
+      this.updateTip();
+    });
+    this.panel.addEventListener('mouseleave', () => {
+      this.hover = null;
+      this.updateTip();
+    });
     this.root.addEventListener('mousedown', (e) => {
       if (e.target === this.root) this.close();
     });
     document.addEventListener('mousemove', (e) => {
       this.cursorEl.style.left = (e.clientX + 8) + 'px';
       this.cursorEl.style.top = (e.clientY + 8) + 'px';
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+      if (this.hover) this.placeTip();
     });
   }
 
@@ -56,6 +71,7 @@ export class UI {
   open(mode, furnace) {
     this.mode = mode;
     this.furnace = furnace || null;
+    this.hover = null;
     this.root.classList.remove('hidden');
     this.buildPanel();
     this.render();
@@ -63,11 +79,26 @@ export class UI {
 
   close() {
     if (!this.mode) return;
+    const g = this.game;
+    if (g.cursor) this.returnCursor();
     if (this.mode !== 'furnace') this.returnCraftItems();
     this.mode = null;
     this.furnace = null;
+    this.hover = null;
+    this.tipEl.style.display = 'none';
     this.root.classList.add('hidden');
     this.game.onScreenClosed();
+  }
+
+  // 关界面时手上（光标）提着的那组必须放回去，放不下就丢到地上。
+  // 原来完全不处理 → 图标一直挂在屏幕上，那组东西也拿不回来。
+  returnCursor() {
+    const g = this.game;
+    const c = g.cursor;
+    if (!c) return;
+    g.cursor = null;
+    const left = g.inventory.add(c.id, c.count, c.dmg);
+    if (left > 0) this.dropStack(makeStack(c.id, left, c.dmg));
   }
 
   returnCraftItems() {
@@ -75,8 +106,8 @@ export class UI {
     const arr = this.mode === 'crafting' ? g.craft3 : g.craft2;
     for (let i = 0; i < arr.length; i++) {
       if (!arr[i]) continue;
-      const left = g.inventory.add(arr[i].id, arr[i].count);
-      arr[i] = left > 0 ? makeStack(arr[i].id, left) : null;
+      const left = g.inventory.add(arr[i].id, arr[i].count, arr[i].dmg);
+      arr[i] = left > 0 ? makeStack(arr[i].id, left, arr[i].dmg) : null;
       if (arr[i]) {
         this.dropStack(arr[i]);
         arr[i] = null;
@@ -244,9 +275,35 @@ export class UI {
     const index = parseInt(el.dataset.index, 10);
     const right = e.button === 2;
     const shift = e.shiftKey;
-    if (area === 'result') { this.takeResult(right); this.render(); return; }
+    if (area === 'result') { this.takeResult(right, shift); this.render(); return; }
+    if (shift) {
+      // 手上已经提着东西时，shift 点合成格 = 把材料铺进空格（老行为，别动）
+      if (area === 'craft' && this.game.cursor) this.interact(area, index, right, shift);
+      else this.quickMove(area, index);
+      this.render();
+      return;
+    }
     this.interact(area, index, right, shift);
     this.render();
+  }
+
+  // shift 点击 = 快速转移：背包↔热键栏、合成格/熔炉/防具 → 背包。
+  // 目标区放不下就原地不动，不做半截操作。
+  quickMove(area, index) {
+    const g = this.game;
+    const st = this.getStack(area, index);
+    if (!st) return;
+    let left;
+    if (area === 'inv') {
+      const toHotbar = index >= HOTBAR_SIZE;
+      const from = toHotbar ? 0 : HOTBAR_SIZE;
+      const to = toHotbar ? HOTBAR_SIZE - 1 : INV_SIZE - 1;
+      left = g.inventory.addTo(st.id, st.count, st.dmg, from, to);
+    } else {
+      left = g.inventory.add(st.id, st.count, st.dmg);
+    }
+    if (left >= st.count) return;
+    this.setStack(area, index, left > 0 ? makeStack(st.id, left, st.dmg) : null);
   }
 
   interact(area, index, right, shift) {
@@ -322,8 +379,9 @@ export class UI {
     g.cursor = slot;
   }
 
-  takeResult(right) {
+  takeResult(right, shift) {
     const g = this.game;
+    if (shift) { this.craftAll(); return; }
     const m = matchRecipe(this.craftGrid(), this.craftSize());
     if (!m) return;
     const out = makeStack(m.recipe.result, m.recipe.count);
@@ -348,6 +406,19 @@ export class UI {
     else g.cursor = out;
   }
 
+  // shift 点产物：一路合成到材料用完或背包塞不下，产物直接进背包（不经过光标）。
+  // 先问容量再动手 —— 先 add 后判满会「塞进去一半、材料还留着」，凭空多出物品。
+  craftAll() {
+    const g = this.game;
+    for (let n = 0; n < 64; n++) {
+      const m = matchRecipe(this.craftGrid(), this.craftSize());
+      if (!m) return;
+      if (g.inventory.capacity(m.recipe.result, 0, INV_SIZE - 1) < m.recipe.count) return;
+      g.inventory.add(m.recipe.result, m.recipe.count);
+      this.consumeCraft(m);
+    }
+  }
+
   consumeCraft(m) {
     const grid = this.craftGrid();
     for (const i of m.cells) {
@@ -356,6 +427,46 @@ export class UI {
       s.count--;
       if (s.count <= 0) grid[i] = null;
     }
+  }
+
+  // 界面开着时按 Q：丢鼠标悬停的那一格，而不是热键栏里手持的那一格。
+  // 产物格和熔炉产物格不给丢（丢了等于白烧）。
+  dropHovered(whole) {
+    const g = this.game;
+    const h = this.hover;
+    if (!h || h.area === 'result' || h.area === 'fout') return false;
+    const st = this.getStack(h.area, h.index);
+    if (!st) return false;
+    const n = whole ? st.count : 1;
+    st.count -= n;
+    if (st.count <= 0) this.setStack(h.area, h.index, null);
+    g.spawnDrop(st.id, n);
+    this.render();
+    return true;
+  }
+
+  updateTip() {
+    const st = this.hover && this.mode ? this.getStack(this.hover.area, this.hover.index) : null;
+    if (!st) { this.tipEl.style.display = 'none'; return; }
+    const it = ITEMS[st.id];
+    let text = it.label;
+    if (st.count > 1) text += ' ×' + st.count;
+    if (isTool(st.id)) {
+      const max = it.tool.durability;
+      text += '　耐久 ' + Math.max(0, max - st.dmg) + '/' + max;
+    }
+    this.tipEl.textContent = text;
+    this.tipEl.style.display = 'block';
+    this.placeTip();
+  }
+
+  placeTip() {
+    const w = this.tipEl.offsetWidth, h = this.tipEl.offsetHeight;
+    let x = this.mouse.x + 14, y = this.mouse.y + 14;
+    if (x + w > window.innerWidth) x = this.mouse.x - w - 8;
+    if (y + h > window.innerHeight) y = this.mouse.y - h - 8;
+    this.tipEl.style.left = x + 'px';
+    this.tipEl.style.top = y + 'px';
   }
 
   showHint(text) {
@@ -378,7 +489,7 @@ export class UI {
       el.classList.toggle('sel', i === g.inventory.selected);
       this.updateSlot(el, g.inventory.slots[i]);
     }
-    if (!this.mode) { this.updateCursor(); return; }
+    if (!this.mode) { this.updateCursor(); this.tipEl.style.display = 'none'; return; }
 
     for (const el of this.slotViews) {
       const area = el.dataset.area;
@@ -393,6 +504,7 @@ export class UI {
       this.arrowEl.style.width = (Math.min(1, progPct) * 100) + '%';
     }
     this.updateCursor();
+    this.updateTip();
   }
 
   updateCursor() {

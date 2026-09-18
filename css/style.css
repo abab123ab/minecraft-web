@@ -308,6 +308,21 @@ html, body {
   pointer-events: none;
   display: none;
 }
+
+#slot-tip {
+  position: fixed;
+  z-index: 61;
+  pointer-events: none;
+  display: none;
+  padding: 4px 8px;
+  background: rgba(16, 0, 16, 0.94);
+  border: 1px solid #2b0f5a;
+  color: #ffffff;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-shadow: 1px 1px 0 #00000080;
+}
 #cursor-stack canvas {
   width: 34px;
   height: 34px;

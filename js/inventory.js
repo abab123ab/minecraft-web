@@ -39,31 +39,44 @@ export class Inventory {
     return true;
   }
 
-  add(id, count) {
+  add(id, count, dmg) { return this.addTo(id, count, dmg, 0, INV_SIZE - 1); }
+
+  // 只在 [from,to] 这段槽位里放。shift 快速转移靠它把物品限定在背包或热键栏里。
+  // dmg 必须带上：工具挪一次位置就变全新的，是很久之前就埋下的坑。
+  addTo(id, count, dmg, from, to) {
     let left = count;
     const max = maxStack(id);
-    if (isTool(id)) {
-      for (let i = 0; i < INV_SIZE && left > 0; i++) {
-        if (this.slots[i] === null) { this.slots[i] = makeStack(id, 1); left--; }
-      }
-      return left;
-    }
-    for (let i = 0; i < INV_SIZE && left > 0; i++) {
-      const s = this.slots[i];
-      if (s && s.id === id && s.count < max) {
-        const take = Math.min(max - s.count, left);
-        s.count += take;
-        left -= take;
+    const tool = isTool(id);
+    if (!tool) {
+      for (let i = from; i <= to && left > 0; i++) {
+        const s = this.slots[i];
+        if (s && s.id === id && s.count < max) {
+          const take = Math.min(max - s.count, left);
+          s.count += take;
+          left -= take;
+        }
       }
     }
-    for (let i = 0; i < INV_SIZE && left > 0; i++) {
-      if (this.slots[i] === null) {
-        const take = Math.min(max, left);
-        this.slots[i] = makeStack(id, take);
-        left -= take;
-      }
+    for (let i = from; i <= to && left > 0; i++) {
+      if (this.slots[i] !== null) continue;
+      const take = tool ? 1 : Math.min(max, left);
+      this.slots[i] = makeStack(id, take, dmg);
+      left -= take;
     }
     return left;
+  }
+
+  // [from,to] 还能装下几个。先问容量再放，避免「只塞进去一半、材料又退不回来」。
+  capacity(id, from, to) {
+    const max = maxStack(id);
+    const tool = isTool(id);
+    let cap = 0;
+    for (let i = from; i <= to; i++) {
+      const s = this.slots[i];
+      if (!s) cap += max;
+      else if (!tool && s.id === id) cap += max - s.count;
+    }
+    return cap;
   }
 
   removeAt(i, n) {

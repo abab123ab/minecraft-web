@@ -298,7 +298,9 @@ class Game {
       this.player.flying = !this.player.flying;
       this.ui.showHint(this.player.flying ? '飞行模式：开' : '飞行模式：关');
     } else if (code === 'KeyQ') {
-      this.dropOne();
+      // 界面开着时丢鼠标悬停的那格，否则丢手持那格；按住 Ctrl 丢整组
+      if (this.ui.isOpen()) this.ui.dropHovered(e.ctrlKey);
+      else this.dropOne(e.ctrlKey);
     } else if (code === 'KeyR') {
       this.cycleRenderDistance();
     } else if (code === 'KeyO') {
@@ -328,11 +330,12 @@ class Game {
     this.ui.render();
   }
 
-  dropOne() {
-    const s = this.inventory.held();
+  dropOne(whole) {
+    const i = this.inventory.selected;
+    const s = this.inventory.slots[i];
     if (!s) return;
-    const n = this.inventory.removeAt(this.inventory.selected, 1);
-    if (n > 0) this.spawnDrop(s.id, 1);
+    const n = this.inventory.removeAt(i, whole ? s.count : 1);
+    if (n > 0) this.spawnDrop(s.id, n);
     this.ui.render();
   }
 
