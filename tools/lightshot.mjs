@@ -80,9 +80,18 @@ await sleep(4000);
 
 async function shot(name) {
   const r = await cdp.send('Page.captureScreenshot', { format: 'png' });
-  const f = path.join(OUT, name + '.png');
-  fs.writeFileSync(f, Buffer.from(r.result.data, 'base64'));
-  console.log('  已存 ' + name + '.png  (' + fs.statSync(f).size + ' bytes)');
+  const buf = Buffer.from(r.result.data, 'base64');
+  let f = path.join(OUT, name + '.png');
+  try {
+    fs.writeFileSync(f, buf);
+  } catch (e) {
+    // 同名文件被外部进程占着（EPERM/EBUSY）时不能整个脚本挂掉，换个名字继续，否则后面的对照全跑不到。
+    if (e.code !== 'EPERM' && e.code !== 'EBUSY' && e.code !== 'EACCES') throw e;
+    f = path.join(OUT, name + '-' + Date.now() + '.png');
+    fs.writeFileSync(f, buf);
+    console.log('  ! ' + name + '.png 被占用，改存 ' + path.basename(f));
+  }
+  console.log('  已存 ' + path.basename(f) + '  (' + fs.statSync(f).size + ' bytes)');
 }
 
 // elev = sin(t*2PI - PI/2) → t=0 午夜、t=0.25 日出、t=0.5 正午、t=0.75 日落
