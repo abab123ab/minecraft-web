@@ -2,8 +2,10 @@ import * as THREE from './vendor/three.module.js';
 import { BLOCKS, AIR } from './blocks.js';
 import { CHUNK, HEIGHT, SECTION, SEC_COUNT } from './worlddef.js';
 import { generateChunk } from './worldgen.js';
-import { computeSectionLight } from './lighting.js';
+import { computeChunkLight } from './lighting.js';
 import { buildSectionBatches, setSectionMesh } from './mesher.js';
+
+const MAX_LIGHT_ROUNDS = 6;
 
 export class World {
   constructor(scene, atlasCanvas, edits) {
@@ -78,6 +80,7 @@ export class World {
     const ch = this.chunks.get(this.key(cx, cz));
     if (!ch) return;
     ch.secDirty.fill(1);
+    ch.lightStale = 1;
     this.dirty.add(ch);
   }
 
@@ -87,7 +90,23 @@ export class World {
     const s0 = Math.max(0, (y0 / SECTION) | 0);
     const s1 = Math.min(SEC_COUNT - 1, (y1 / SECTION) | 0);
     for (let s = s0; s <= s1; s++) ch.secDirty[s] = 1;
+    ch.lightStale = 1;
     this.dirty.add(ch);
+  }
+
+  // 光照是整块一个整体（只增不减地扩散），邻块会读本块最外一圈，所以本块光照一变，
+  // 4 个邻块必须跟着重算；不然区块边界上会出现一条光被硬切断的缝。
+  // 光照值单调递增且上限 15，反复触发必然收敛，update() 里再用轮数上限保底。
+  markLightNeighbors(ch) {
+    for (let d = 0; d < 4; d++) {
+      const dx = d === 0 ? -1 : (d === 1 ? 1 : 0);
+      const dz = d === 2 ? -1 : (d === 3 ? 1 : 0);
+      const n = this.chunks.get(this.key(ch.cx + dx, ch.cz + dz));
+      if (!n || n.lightStale) continue;
+      n.lightStale = 1;
+      n.secDirty.fill(1);
+      this.dirty.add(n);
+    }
   }
 
   recordEdit(cx, cz, idx, id, prev) {
@@ -122,6 +141,7 @@ export class World {
       surface: new Uint8Array(CHUNK * CHUNK),
       generated: false,
       secDirty: new Uint8Array(SEC_COUNT).fill(1),
+      lightStale: 1,
       secs: Array.from({ length: SEC_COUNT }, () => ({ o: null, w: null, g: null }))
     };
     this.chunks.set(k, ch);
@@ -154,16 +174,23 @@ export class World {
 
     const t1 = performance.now();
     let over = false;
-    for (const ch of this.dirty) {
-      for (let s = 0; s < SEC_COUNT; s++) {
-        if (!ch.secDirty[s]) continue;
-        this.buildSection(ch, s);
-        ch.secDirty[s] = 0;
-        if (performance.now() - t1 > budgetMs) { over = true; break; }
+    let rounds = 0;
+    // 光照外溢到邻块会让邻块重新进 dirty，所以整段可能要跑好几轮才收敛。
+    // 光照单调递增且上限 15，轮数有天然上界，这里再给个硬上限免得卡帧。
+    while (this.dirty.size > 0 && rounds < MAX_LIGHT_ROUNDS) {
+      rounds++;
+      for (const ch of this.dirty) {
+        for (let s = 0; s < SEC_COUNT; s++) {
+          if (!ch.secDirty[s]) continue;
+          this.buildSection(ch, s);
+          ch.secDirty[s] = 0;
+          if (performance.now() - t1 > budgetMs) { over = true; break; }
+        }
+        let left = 0;
+        for (let s = 0; s < SEC_COUNT; s++) if (ch.secDirty[s]) left++;
+        if (left === 0) this.dirty.delete(ch);
+        if (over) break;
       }
-      let left = 0;
-      for (let s = 0; s < SEC_COUNT; s++) if (ch.secDirty[s]) left++;
-      if (left === 0) this.dirty.delete(ch);
       if (over) break;
     }
 
@@ -188,9 +215,15 @@ export class World {
   }
 
   buildSection(ch, si) {
-    // 必须先算光再建面：网格的顶点色取自面外侧那一格的光照，
-    // 顺序反了的话新区块首次建面只能读到全 0，被迫靠邻块触发重建才变对。
-    computeSectionLight(ch, si);
+    // 光照按整块算一次（每 16 格一 section 切开算会让光在 y=16/32/48/64 处断掉），
+    // 且必须在建面之前算：网格顶点色取的是面外侧那一格的光照。
+    if (ch.lightStale) {
+      ch.lightStale = 0;
+      const spilled = computeChunkLight(ch, (cx, cz) => this.chunks.get(this.key(cx, cz)));
+      // 光照一变，本块所有 section 的顶点色全部作废，不能只重建被编辑的那一层。
+      ch.secDirty.fill(1);
+      if (spilled) this.markLightNeighbors(ch);
+    }
     const ctx = {
       getChunk: (cx, cz) => this.chunks.get(this.key(cx, cz)),
       useAO: this.useAO
@@ -202,6 +235,7 @@ export class World {
   }
 
   buildMesh(ch) {
+    ch.lightStale = 1;
     for (let s = 0; s < SEC_COUNT; s++) this.buildSection(ch, s);
     ch.secDirty.fill(0);
     this.dirty.delete(ch);
