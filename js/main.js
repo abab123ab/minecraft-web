@@ -1,14 +1,16 @@
 import * as THREE from './vendor/three.module.js';
 import { buildAtlas, ASSET_COUNT, tileUV, TILE_INDEX } from './textures.js';
 import { BLOCKS, AIR, breakTime, canHarvest } from './blocks.js';
-import { ITEMS, ITEM_BY_KEY, FIST_ATTACK, armorStats, itemIconCanvas } from './items.js';
+import { ITEMS, ITEM_BY_KEY, FIST_ATTACK } from './items.js';
 import { World } from './world.js';
 import { CHUNK, HEIGHT, SEA } from './worlddef.js';
-import { terrainHeight, biomeAt } from './worldgen.js';
+import { terrainHeight } from './worldgen.js';
+import { Sky, SLEEP_SPEED, SKY_DAY } from './sky.js';
+import { makeFurnace, tickFurnaces } from './furnace.js';
+import { updateHud } from './hudview.js';
 import { Player, P_WIDTH, P_HEIGHT } from './player.js';
 import { DroppedItems } from './entities.js';
-import { Inventory, makeStack, HOTBAR_SIZE, maxStack, INV_SIZE, ARMOR_SIZE } from './inventory.js';
-import { smeltRecipe } from './crafting.js';
+import { Inventory, HOTBAR_SIZE, INV_SIZE, ARMOR_SIZE } from './inventory.js';
 import { UI } from './ui.js';
 import { Survival, EXHAUST, MAX_HUNGER, MAX_HEALTH } from './survival.js';
 import { Sfx } from './sfx.js';
@@ -21,13 +23,14 @@ import { loadSave, saveGame, clearSave, restoreInventory, restoreFurnaces } from
 const REACH = 5;
 const ATTACK_REACH = 3.2;
 const ATTACK_COOLDOWN = 0.5;
-const DAY_LENGTH = 600;
-const SLEEP_SPEED = 80;
-const SKY_DAY = 0x78a7ff;
-const SKY_NIGHT = 0x05070f;
-const SKY_DUSK = 0xd9803f;
 
 class Game {
+  get isDay() { return this.sky.isDay; }
+  get isNight() { return this.sky.isNight; }
+  get lightLevel() { return this.sky.light; }
+  get timeOfDay() { return this.sky.timeOfDay; }
+  set timeOfDay(v) { this.sky.timeOfDay = v; }
+
   constructor(atlasCanvas, save) {
     this.canvas = document.getElementById('game');
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false });
@@ -55,12 +58,8 @@ class Game {
     this.sfx = new Sfx();
     this.mobs.sfx = this.sfx;
     this.particles = new Particles(this.scene, this.world.atlasTexture);
-    this.buildSky();
+    this.sky = new Sky(this.scene, this.camera, this.world);
     this.attackCd = 0;
-    this.isDay = true;
-    this.isNight = false;
-    this.lightLevel = 1;
-    this.baseFov = this.camera.fov;
     this.deathShown = false;
     this.input = {
       forward: false, back: false, left: false, right: false,
@@ -71,7 +70,6 @@ class Game {
     this.sprintTap = false;
     this.ctrlSprint = false;
     this.lastWUp = -1e9;
-    this.timeOfDay = 0.28;
     this.started = false;
     this.sensitivity = 0.0022;
     this.fpsAcc = 0;
@@ -229,7 +227,7 @@ class Game {
     if (aoSel) {
       aoSel.addEventListener('change', () => this.setAO(!aoSel.checked));
     }
-    this.updateFog();
+    this.sky.setFog(this.world.renderDistance * CHUNK);
 
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === this.canvas;
@@ -364,7 +362,7 @@ class Game {
 
   setRenderDistance(rd) {
     this.world.renderDistance = rd;
-    this.updateFog();
+    this.sky.setFog(this.world.renderDistance * CHUNK);
     const sel = document.getElementById('rd');
     if (sel) sel.value = String(rd);
     this.ui.showHint('渲染距离 ' + rd + '（按 R 继续调）');
@@ -384,11 +382,6 @@ class Game {
     let next = steps[0];
     for (const s of steps) { if (s > cur) { next = s; break; } }
     this.setRenderDistance(next);
-  }
-
-  updateFog() {
-    const d = this.world.renderDistance * CHUNK;
-    this.scene.fog = new THREE.Fog(SKY_DAY, d * 0.55, d * 0.95);
   }
 
   hitTest() {
@@ -413,7 +406,7 @@ class Game {
     if (block.key === 'furnace') {
       const k = hit.x + ',' + hit.y + ',' + hit.z;
       if (!this.furnaces.has(k)) {
-        this.furnaces.set(k, { input: null, fuel: null, out: null, burn: 0, burnMax: 0, prog: 0, progMax: 1 });
+        this.furnaces.set(k, makeFurnace());
       }
       this.ui.open('furnace', this.furnaces.get(k));
       document.exitPointerLock();
@@ -656,113 +649,11 @@ class Game {
   }
 
   updateFurnaces(dt) {
-    for (const f of this.furnaces.values()) {
-      const rec = f.input ? smeltRecipe(f.input.id) : null;
-      const canOutput = rec && (!f.out || (f.out.id === rec.output && f.out.count < maxStack(rec.output)));
-      if (rec && canOutput) {
-        if (f.burn <= 0 && f.fuel) {
-          const fuelVal = ITEMS[f.fuel.id].fuel || 0;
-          if (fuelVal > 0) {
-            f.burn = fuelVal;
-            f.burnMax = fuelVal;
-            f.fuel.count--;
-            if (f.fuel.count <= 0) f.fuel = null;
-          }
-        }
-        if (f.burn > 0) {
-          f.burn -= dt;
-          f.progMax = rec.time;
-          f.prog += dt;
-          if (f.prog >= rec.time) {
-            f.prog = 0;
-            f.input.count--;
-            if (f.input.count <= 0) f.input = null;
-            if (f.out) f.out.count++;
-            else f.out = makeStack(rec.output, 1);
-            this.sfx.furnaceReady();
-          }
-        } else {
-          f.prog = 0;
-        }
-      } else {
-        f.prog = 0;
-        if (f.burn > 0) f.burn = Math.max(0, f.burn - dt);
-      }
-      if (f.burn <= 0) f.burnMax = 0;
-    }
-    if (this.ui.isOpen() && this.ui.mode === 'furnace') this.ui.render();
-  }
-
-  buildSky() {
-    const loader = new THREE.TextureLoader();
-    const pixel = (t) => { t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; return t; };
-
-    const sunTex = pixel(loader.load('textures/environment/sun.png'));
-    const moonTex = pixel(loader.load('textures/environment/moon_phases.png'));
-    moonTex.repeat.set(0.25, 0.5);
-    moonTex.offset.set(0, 0.5);
-
-    const sprite = (tex, size) => {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, transparent: true, fog: false, depthWrite: false
-      }));
-      s.scale.set(size, size, 1);
-      s.renderOrder = -2;
-      this.scene.add(s);
-      return s;
-    };
-    this.sun = sprite(sunTex, 64);
-    this.moon = sprite(moonTex, 48);
-
-    const cloudTex = loader.load('textures/environment/clouds.png');
-    cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
-    cloudTex.repeat.set(20, 20);
-    cloudTex.magFilter = THREE.NearestFilter;
-    this.clouds = new THREE.Mesh(
-      new THREE.PlaneGeometry(2600, 2600),
-      new THREE.MeshBasicMaterial({
-        map: cloudTex, transparent: true, opacity: 0.7,
-        depthWrite: false, fog: false, side: THREE.DoubleSide
-      })
-    );
-    this.clouds.rotation.x = -Math.PI / 2;
-    this.clouds.position.y = HEIGHT + 36;
-    this.clouds.renderOrder = -1;
-    this.scene.add(this.clouds);
+    tickFurnaces(this, dt);
   }
 
   updateDayNight(dt) {
-    this.timeOfDay = (this.timeOfDay + dt / DAY_LENGTH) % 1;
-    const t = this.timeOfDay;
-    const elev = Math.sin(t * Math.PI * 2 - Math.PI / 2);
-    this.isDay = elev > 0.15;
-    this.isNight = elev < -0.1;
-    const amt = Math.max(0.30, Math.min(1, elev * 1.6 + 0.45));
-    const night = new THREE.Color(SKY_NIGHT);
-    const day = new THREE.Color(SKY_DAY);
-    const dusk = new THREE.Color(SKY_DUSK);
-    let sky;
-    if (elev > 0.15) sky = day;
-    else if (elev > -0.15) sky = dusk.clone().lerp(day, (elev + 0.15) / 0.3);
-    else sky = night.clone().lerp(dusk, Math.max(0, (elev + 0.5) / 0.35));
-    this.scene.background = sky;
-    if (this.scene.fog) this.scene.fog.color.copy(sky);
-    const light = 0.30 + 0.70 * amt;
-    this.lightLevel = light;
-    this.world.matOpaque.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
-    this.world.matWater.color.setRGB(light, light, light);
-    this.world.matGlass.color.setRGB(light, light, light);
-    const a = this.timeOfDay * Math.PI * 2 - Math.PI / 2;
-    const sx = Math.cos(a) * 420, sy = Math.sin(a) * 420;
-    const cp = this.camera.position;
-    this.sun.position.set(cp.x + sx, cp.y + sy, cp.z - 220);
-    this.moon.position.set(cp.x - sx, cp.y - sy, cp.z - 220);
-    this.sun.visible = sy > -40;
-    this.moon.visible = sy < 40;
-    this.clouds.position.x = cp.x;
-    this.clouds.position.z = cp.z;
-    const off = this.clouds.material.map.offset;
-    off.x = (off.x + dt * 0.0035) % 1;
+    this.sky.update(dt);
   }
 
   loop() {
@@ -814,7 +705,7 @@ class Game {
       this.particles.update(dt);
       this.ui.tick(dt);
       this.autoTuneQuality(dt);
-      this.updateFov(dt);
+      this.sky.updateFov(dt, this.player.sprinting);
       if (this.survival.dead && !this.deathShown) this.showDeath();
     }
 
@@ -832,7 +723,7 @@ class Game {
     }
     this.player.applyToCamera(this.camera);
 
-    this.updateHud();
+    updateHud(this);
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(() => this.loop());
   }
@@ -850,14 +741,6 @@ class Game {
       headInWater: p.headInWater && !flying,
       landedFall: (p.justLanded && !p.inWater) ? p.landedFall : 0
     });
-  }
-
-  updateFov(dt) {
-    const target = this.baseFov + (this.player.sprinting ? 8 : 0);
-    const diff = target - this.camera.fov;
-    if (Math.abs(diff) < 0.05) return;
-    this.camera.fov += diff * Math.min(1, dt * 8);
-    this.camera.updateProjectionMatrix();
   }
 
   showDeath() {
@@ -897,45 +780,6 @@ class Game {
     }
   }
 
-  updateHud() {
-    const p = this.player;
-    const st = armorStats(this.inventory.armor);
-    this.survival.setArmor(st.points, st.toughness);
-    this.hud.update(this.survival);
-    this.updateHand();
-    const held = this.inventory.held();
-    const bio = biomeAt(Math.floor(p.pos.x), Math.floor(p.pos.z));
-    const bioName = { plains: '平原', forest: '森林', desert: '沙漠', snowy: '雪原', mountains: '山地' }[bio] || bio;
-    this.debugEl.textContent = this.fps + ' FPS · 区块 ' + this.world.chunks.size +
-      ' · 待更新 ' + this.world.dirty.size + ' · 渲染距离 ' + this.world.renderDistance +
-      ' · 生物 ' + this.mobs.count() + (this.isNight ? ' · 夜晚' : ' · 白天');
-    this.coordEl.textContent = 'XYZ ' + p.pos.x.toFixed(1) + ' / ' + p.pos.y.toFixed(1) + ' / ' + p.pos.z.toFixed(1) +
-      ' · ' + bioName + ' · ' + (held ? ITEMS[held.id].label : '空手') +
-      (this.player.flying ? ' · 飞行' : '');
-  }
-
-  updateHand() {
-    const el = this.handEl;
-    if (!el) return;
-    const held = this.inventory.held();
-    if (!held) {
-      if (this.lastHandId !== -1) { el.style.display = 'none'; this.lastHandId = -1; }
-      return;
-    }
-    if (el.style.display === 'none') el.style.display = 'block';
-    if (this.lastHandId !== held.id) {
-      const ctx = el.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, 72, 72);
-      ctx.drawImage(itemIconCanvas(this.atlasCanvas, ITEMS[held.id], 72), 0, 0, 72, 72);
-      this.lastHandId = held.id;
-    }
-    const amp = this.player.flying ? 0 : this.player.bobAmount;
-    const bobY = Math.sin(this.player.bobPhase * 2) * 7 * amp;
-    const bobX = Math.cos(this.player.bobPhase) * 5 * amp;
-    const swing = this.mining ? Math.sin(performance.now() / 80) * 16 : 0;
-    el.style.transform = 'translate(' + bobX.toFixed(2) + 'px,' + bobY.toFixed(2) + 'px) rotate(' + swing.toFixed(1) + 'deg)';
-  }
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
