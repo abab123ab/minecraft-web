@@ -23,6 +23,9 @@ import { loadSave, saveGame, clearSave, restoreInventory, restoreFurnaces } from
 const REACH = 5;
 const ATTACK_REACH = 3.2;
 const ATTACK_COOLDOWN = 0.5;
+// 连锁挖矿的上限：一条矿脉最多 48 格，一棵树最多 96 格原木
+const ORE_CHAIN_LIMIT = 48;
+const LOG_CHAIN_LIMIT = 96;
 
 class Game {
   get isDay() { return this.sky.isDay; }
@@ -330,6 +333,21 @@ class Game {
     this.ui.render();
   }
 
+  // 吸掉落物：同一帧吸到的东西合并成一行提示 + 一声音效 + 一次重绘。
+  // 原来是每堆各来一遍 —— 一条 48 格的矿脉同时吸过来就是几十声重叠音、几十次全量重绘。
+  collectDrops(dt) {
+    const picked = new Map();
+    this.dropped.update(dt, this.player.pos, this.inventory, (id, n) => {
+      picked.set(id, (picked.get(id) || 0) + n);
+    });
+    if (picked.size === 0) return;
+    const parts = [];
+    for (const [id, n] of picked) parts.push('+' + n + ' ' + ITEMS[id].label);
+    this.sfx.pickup();
+    this.ui.showHint(parts.join('　'));
+    this.ui.render();
+  }
+
   dropOne(whole) {
     const i = this.inventory.selected;
     const s = this.inventory.slots[i];
@@ -485,21 +503,74 @@ class Game {
     const toolDef = held ? ITEMS[held.id].tool : null;
     const harvest = canHarvest(block, toolDef);
 
-    let cells;
-    if (block.ore) {
-      cells = this.collectOreVein(x, y, z, id, 48);
-    } else {
-      cells = [[x, y, z]];
-    }
-
-    for (const [bx, by, bz] of cells) {
+    const plan = this.chainPlan(x, y, z, id, block);
+    // 按物品种类合并：一条 48 格的脉掉 1 堆，而不是 48 个独立实体
+    const tally = new Map();
+    let sound = true;
+    for (const [bx, by, bz] of plan.blocks) {
       const b = BLOCKS[this.world.getBlock(bx, by, bz)] || block;
-      this.mineBlock(bx, by, bz, b, harvest, toolDef);
+      // 一次连锁只响一声，否则几十格会在同一帧叠几十个音效
+      this.mineBlock(bx, by, bz, b, harvest, sound, tally);
+      sound = false;
+      if (toolDef) {
+        // 耐久按实际挖掉的格数扣。中途挖断了就停手，剩下的留给玩家换把镐子
+        this.inventory.damageHeld(1);
+        if (!this.inventory.held()) break;
+      }
+    }
+    // 清掉的树叶是纯装饰：不掉物、不出声、也不掷苹果
+    for (const [bx, by, bz] of plan.clear) this.world.setBlock(bx, by, bz, AIR);
+
+    for (const [dropId, count] of tally) {
+      this.dropped.spawn(dropId, count, x + 0.5, y + 0.4, z + 0.5, null);
     }
 
-    if (held && toolDef) this.inventory.damageHeld(1);
     this.survival.addExhaustion(EXHAUST.mine);
     this.ui.render();
+  }
+
+  // 挖这一格该连带哪些格：矿 → 同种矿脉；原木 → 整棵树（含要清掉的树叶）；其余 → 就它自己
+  chainPlan(x, y, z, id, block) {
+    if (block.ore) return { blocks: this.collectOreVein(x, y, z, id, ORE_CHAIN_LIMIT), clear: [] };
+    if (block.key === 'log' || block.key === 'spruce_log') return this.planTree(x, y, z, id);
+    return { blocks: [[x, y, z]], clear: [] };
+  }
+
+  // 树干用连通原木（和矿脉同一套 flood fill）；树叶按树干包围盒外扩 3 格清掉。
+  // 外扩 5 格内如果还有别的树桩，那附近的树叶就留着 —— 否则砍一棵会把旁边那棵也剃秃。
+  planTree(x, y, z, id) {
+    const logs = this.collectOreVein(x, y, z, id, LOG_CHAIN_LIMIT);
+    let minX = x, maxX = x, minZ = z, maxZ = z, minY = y, maxY = y;
+    for (const [bx, by, bz] of logs) {
+      if (bx < minX) minX = bx;
+      if (bx > maxX) maxX = bx;
+      if (bz < minZ) minZ = bz;
+      if (bz > maxZ) maxZ = bz;
+      if (by < minY) minY = by;
+      if (by > maxY) maxY = by;
+    }
+    const own = new Set(logs.map((c) => c[0] + ',' + c[1] + ',' + c[2]));
+    const otherTrunks = [];
+    const leaves = [];
+    for (let cz = minZ - 5; cz <= maxZ + 5; cz++) {
+      for (let cx = minX - 5; cx <= maxX + 5; cx++) {
+        for (let cy = minY; cy <= maxY + 3; cy++) {
+          const b = BLOCKS[this.world.getBlock(cx, cy, cz)];
+          if (!b) continue;
+          const dx = Math.max(minX - cx, cx - maxX, 0);
+          const dz = Math.max(minZ - cz, cz - maxZ, 0);
+          if (b.key === 'log' || b.key === 'spruce_log') {
+            if (!own.has(cx + ',' + cy + ',' + cz)) otherTrunks.push([cx, cy, cz]);
+          } else if ((b.key === 'leaves' || b.key === 'spruce_leaves') && dx <= 3 && dz <= 3) {
+            leaves.push([cx, cy, cz]);
+          }
+        }
+      }
+    }
+    const clear = otherTrunks.length === 0 ? leaves : leaves.filter(([lx, ly, lz]) =>
+      !otherTrunks.some(([fx, fy, fz]) =>
+        Math.abs(fx - lx) <= 2 && Math.abs(fy - ly) <= 2 && Math.abs(fz - lz) <= 2));
+    return { blocks: logs, clear };
   }
 
   collectOreVein(x, y, z, id, limit) {
@@ -524,22 +595,18 @@ class Game {
     return found;
   }
 
-  mineBlock(x, y, z, block, harvest, toolDef) {
+  mineBlock(x, y, z, block, harvest, sound, tally) {
     this.world.setBlock(x, y, z, AIR);
     if (block.tiles) this.particles.burst(x, y, z, block.tiles[1] || block.tiles[0], 10);
-    if (!block.unbreakable) this.sfx.breakBlock(block);
+    if (!block.unbreakable && sound) this.sfx.breakBlock(block);
     if (harvest && block.drop !== null) {
       const dropKey = block.drop || block.key;
       const it = ITEM_BY_KEY[dropKey];
-      if (it) {
-        for (let i = 0; i < (block.dropCount || 1); i++) {
-          this.dropped.spawn(it.id, 1, x + 0.5, y + 0.4, z + 0.5, null);
-        }
-      }
+      if (it) tally.set(it.id, (tally.get(it.id) || 0) + (block.dropCount || 1));
     }
     if (block.bonusDrop && Math.random() < block.bonusDrop.chance) {
       const bonus = ITEM_BY_KEY[block.bonusDrop.key];
-      if (bonus) this.dropped.spawn(bonus.id, 1, x + 0.5, y + 0.4, z + 0.5, null);
+      if (bonus) tally.set(bonus.id, (tally.get(bonus.id) || 0) + 1);
     }
   }
 
@@ -699,11 +766,7 @@ class Game {
       const attacked = canAct ? this.updateAttack(dt) : false;
       if (attacked) this.hideMineOverlay();
       else this.updateMining(canAct ? dt : 0);
-      this.dropped.update(dt, this.player.pos, this.inventory, (id, n) => {
-        this.sfx.pickup();
-        this.ui.showHint('+' + n + ' ' + ITEMS[id].label);
-        this.ui.render();
-      });
+      this.collectDrops(dt);
       this.updateFurnaces(dt);
       this.particles.update(dt);
       this.ui.tick(dt);

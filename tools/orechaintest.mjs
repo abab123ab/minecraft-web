@@ -202,12 +202,13 @@ const chain = await ev(`(async function(){
     for (let dy = 0; dy < 2; dy++)
       for (let dz = 0; dz < 2; dz++)
         if (g.world.getBlock(bx + dx, by + dy, bz + 3 + dz) === 0) broken++;
-  const drops = g.dropped.list.length;
+  // 掉落已按物品种类合并成 1 堆，所以这里数「物品总数」而不是「实体个数」
+  const drops = g.dropped.list.reduce((a, e) => a + e.count, 0);
   g.inventory.slots[0] = null;
   return { before, connectedBefore, broken, drops };
 })()`);
 check('连锁挖矿：2x2x2 煤矿被挖掉多数', chain.broken >= 6, JSON.stringify(chain));
-check('连锁挖矿产生多个掉落', chain.drops >= 6, JSON.stringify(chain));
+check('连锁挖矿掉出多个物品', chain.drops >= 6, JSON.stringify(chain));
 
 // ---- C2 真实世界回归：自然生成的矿石必须能连锁（抓“没有连锁”的线上 bug）----
 // 旧实现用 6 邻接 BFS + 自然单块矿石 → 挖一块只掉一块。这里直接验证生成后的矿石
@@ -327,6 +328,180 @@ const noChain = await ev(`(async function(){
   return { remaining };
 })()`);
 check('泥土不会连锁', noChain.remaining === 8, JSON.stringify(noChain));
+
+// ---- E 木头也能连锁：砍树干连带树冠一起清掉 ----
+// 树干用连通原木 flood fill，树叶按树干包围盒外扩 3 格清。清掉的树叶是纯装饰：
+// 不掉物、不掷苹果（橡树树叶带 5% 苹果），否则砍一棵树会下苹果雨。
+const tree = await ev(`(async function(){
+  const g = window.game;
+  const blocks = await import('/js/blocks.js');
+  const items = await import('/js/items.js');
+  const logId = blocks.BLOCK_BY_KEY['log'].id;
+  const leafId = blocks.BLOCK_BY_KEY['leaves'].id;
+  const logItemId = items.ITEM_BY_KEY['log'].id;
+  const appleId = items.ITEM_BY_KEY['apple'].id;
+  const axeId = items.ITEM_BY_KEY['diamond_axe'].id;
+  const p = g.player.pos;
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+  // 空场要盖住 planTree 的扫描范围：x 树干±5、z 树干±5、y 树干底 ~ 顶+3
+  for (let dx = -7; dx <= 7; dx++)
+    for (let dy = -1; dy <= 9; dy++)
+      for (let dz = -3; dz <= 11; dz++)
+        g.world.setBlock(bx + dx, by + dy, bz + dz, 0);
+  const tx = bx, tz = bz + 5;
+  for (let dy = 0; dy < 5; dy++) g.world.setBlock(tx, by + dy, tz, logId);
+  let leavesPlaced = 0;
+  for (let dy = 3; dy <= 4; dy++)
+    for (let dx = -2; dx <= 2; dx++)
+      for (let dz = -2; dz <= 2; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        g.world.setBlock(tx + dx, by + dy, tz + dz, leafId);
+        leavesPlaced++;
+      }
+  g.dropped.clear();
+  g.inventory.slots[0] = { id: axeId, count: 1, dmg: 0 };
+  g.inventory.selected = 0;
+  let soundCalls = 0;
+  const origBreak = g.sfx.breakBlock;
+  g.sfx.breakBlock = function(){ soundCalls++; };
+  g.breakBlock(tx, by, tz);
+  g.sfx.breakBlock = origBreak;
+  let logsLeft = 0, leavesLeft = 0;
+  for (let dy = 0; dy < 5; dy++) if (g.world.getBlock(tx, by + dy, tz) === logId) logsLeft++;
+  for (let dy = 3; dy <= 4; dy++)
+    for (let dx = -2; dx <= 2; dx++)
+      for (let dz = -2; dz <= 2; dz++)
+        if (g.world.getBlock(tx + dx, by + dy, tz + dz) === leafId) leavesLeft++;
+  let logItems = 0, apples = 0;
+  for (const e of g.dropped.list) {
+    if (e.id === logItemId) logItems += e.count;
+    if (e.id === appleId) apples += e.count;
+  }
+  const entities = g.dropped.list.length;
+  const dmg = g.inventory.slots[0] ? g.inventory.slots[0].dmg : -1;
+  g.dropped.clear();
+  g.inventory.slots[0] = null;
+  return { leavesPlaced, logsLeft, leavesLeft, logItems, apples, entities, soundCalls, dmg };
+})()`);
+check('连锁砍树：5 格树干全清、掉 5 个原木', tree.logsLeft === 0 && tree.logItems === 5, JSON.stringify(tree));
+check('连锁砍树：树冠树叶一并清掉', tree.leavesPlaced > 0 && tree.leavesLeft === 0, JSON.stringify(tree));
+check('连锁砍树：掉落合并成 1 堆', tree.entities === 1, JSON.stringify(tree));
+check('连锁砍树：清掉的树叶不掷苹果', tree.apples === 0, JSON.stringify(tree));
+check('连锁砍树：一次连锁只响一声', tree.soundCalls === 1, JSON.stringify(tree));
+check('连锁砍树：耐久按格数扣（5 格树干 = 5 点）', tree.dmg === 5, JSON.stringify(tree));
+
+// ---- F 掉落按物品种类合并 + 耐久按格数扣 ----
+const merge = await ev(`(async function(){
+  const g = window.game;
+  const blocks = await import('/js/blocks.js');
+  const items = await import('/js/items.js');
+  const coalId = blocks.BLOCK_BY_KEY['coal_ore'].id;
+  const coalItemId = items.ITEM_BY_KEY['coal'].id;
+  const woodPick = items.ITEM_BY_KEY['wooden_pickaxe'];
+  const p = g.player.pos;
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+  for (let dx = -2; dx <= 3; dx++)
+    for (let dy = -1; dy <= 3; dy++)
+      for (let dz = 2; dz <= 6; dz++)
+        g.world.setBlock(bx + dx, by + dy, bz + dz, 0);
+  for (let dx = 0; dx < 2; dx++)
+    for (let dy = 0; dy < 2; dy++)
+      for (let dz = 0; dz < 2; dz++)
+        g.world.setBlock(bx + dx, by + dy, bz + 3 + dz, coalId);
+  g.dropped.clear();
+  g.inventory.slots[0] = { id: woodPick.id, count: 1, dmg: 0 };
+  g.inventory.selected = 0;
+  g.breakBlock(bx, by, bz + 3);
+  const entities = g.dropped.list.length;
+  let coals = 0, others = 0;
+  for (const e of g.dropped.list) { if (e.id === coalItemId) coals += e.count; else others += e.count; }
+  const dmg = g.inventory.slots[0] ? g.inventory.slots[0].dmg : -1;
+  g.dropped.clear();
+  g.inventory.slots[0] = null;
+  return { entities, coals, others, dmg, dur: woodPick.tool.durability };
+})()`);
+check('掉落合并：8 格煤矿只生成 1 个掉落实体', merge.entities === 1, JSON.stringify(merge));
+check('掉落合并：物品总数守恒（8 个煤炭，不重复也不漏）', merge.coals === 8 && merge.others === 0, JSON.stringify(merge));
+check('连锁耐久：木镐挖 8 格扣 8 点', merge.dmg === 8 && merge.dur > 8, JSON.stringify(merge));
+
+// ---- G 挖到一半镐子断了要停手，剩下的矿留给下一把 ----
+const toolBreak = await ev(`(async function(){
+  const g = window.game;
+  const blocks = await import('/js/blocks.js');
+  const items = await import('/js/items.js');
+  const coalId = blocks.BLOCK_BY_KEY['coal_ore'].id;
+  const coalItemId = items.ITEM_BY_KEY['coal'].id;
+  const woodPick = items.ITEM_BY_KEY['wooden_pickaxe'];
+  const dur = woodPick.tool.durability;
+  const p = g.player.pos;
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+  for (let dx = -2; dx <= 3; dx++)
+    for (let dy = -1; dy <= 3; dy++)
+      for (let dz = 2; dz <= 6; dz++)
+        g.world.setBlock(bx + dx, by + dy, bz + dz, 0);
+  for (let dx = 0; dx < 2; dx++)
+    for (let dy = 0; dy < 2; dy++)
+      for (let dz = 0; dz < 2; dz++)
+        g.world.setBlock(bx + dx, by + dy, bz + 3 + dz, coalId);
+  g.dropped.clear();
+  g.inventory.slots[0] = { id: woodPick.id, count: 1, dmg: dur - 3 };
+  g.inventory.selected = 0;
+  g.breakBlock(bx, by, bz + 3);
+  let left = 0;
+  for (let dx = 0; dx < 2; dx++)
+    for (let dy = 0; dy < 2; dy++)
+      for (let dz = 0; dz < 2; dz++)
+        if (g.world.getBlock(bx + dx, by + dy, bz + 3 + dz) === coalId) left++;
+  let coals = 0;
+  for (const e of g.dropped.list) if (e.id === coalItemId) coals += e.count;
+  const entities = g.dropped.list.length;
+  const toolGone = !g.inventory.slots[0];
+  g.dropped.clear();
+  return { left, coals, entities, toolGone, dur };
+})()`);
+check('挖断停手：只挖掉 3 格，剩 5 格留着', toolBreak.left === 5 && toolBreak.coals === 3, JSON.stringify(toolBreak));
+check('挖断停手：镐子消失、已挖的 3 格照常掉落（1 堆）', toolBreak.toolGone === true && toolBreak.entities === 1, JSON.stringify(toolBreak));
+
+// ---- H 拾取合并：同一帧吸到多堆只响一声、只刷一行提示 ----
+const pickup = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const p = g.player.pos;
+  const px = Math.floor(p.x), py = Math.floor(p.y), pz = Math.floor(p.z);
+  for (let dy = 0; dy <= 2; dy++)
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dz = -1; dz <= 1; dz++)
+        g.world.setBlock(px + dx, py + dy, pz + dz, 0);
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.selected = 0;
+  g.dropped.clear();
+  const ids = ['coal','dirt','planks'].map((k) => items.ITEM_BY_KEY[k].id);
+  ids.forEach((id, i) => g.dropped.spawn(id, i + 2, p.x, p.y + 0.9, p.z, { x:0, y:0, z:0 }));
+  for (const e of g.dropped.list) e.age = 5;
+
+  let pickupCalls = 0, hintCalls = 0, hintText = '';
+  const origPick = g.sfx.pickup, origHint = g.ui.showHint;
+  g.sfx.pickup = function(){ pickupCalls++; };
+  g.ui.showHint = function(t){ hintCalls++; hintText = t; };
+  g.collectDrops(0.016);
+  g.sfx.pickup = origPick;
+  g.ui.showHint = origHint;
+
+  const bag = {};
+  for (const s of g.inventory.slots) if (s) bag[s.id] = (bag[s.id] || 0) + s.count;
+  const out = {
+    pickupCalls, hintCalls, hintText,
+    left: g.dropped.list.length,
+    got: ids.map((id) => bag[id] || 0)
+  };
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  return out;
+})()`);
+check('拾取合并：3 堆同时吸到只响一声', pickup.pickupCalls === 1, JSON.stringify(pickup));
+check('拾取合并：只刷一行提示且三种物品都在里面', pickup.hintCalls === 1 && pickup.hintText.split('+').length === 4, JSON.stringify(pickup));
+check('拾取合并：物品全部进背包、地上清空', pickup.left === 0 && pickup.got.join(',') === '2,3,4', JSON.stringify(pickup));
 
 console.log('\n================ 矿石与连锁挖矿验证 ================');
 let pass = 0;
