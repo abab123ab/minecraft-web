@@ -26,6 +26,9 @@ const ATTACK_COOLDOWN = 0.5;
 // 连锁挖矿的上限：一条矿脉最多 48 格，一棵树最多 96 格原木
 const ORE_CHAIN_LIMIT = 48;
 const LOG_CHAIN_LIMIT = 96;
+// 滚轮一格 = 100 像素；一次事件最多跳 4 格，避免高分辨率滚轮猛甩时瞬间绕圈
+const WHEEL_NOTCH = 100;
+const MAX_WHEEL_STEPS = 4;
 
 class Game {
   get isDay() { return this.sky.isDay; }
@@ -50,6 +53,7 @@ class Game {
     this.dropped = new DroppedItems(this.scene, this.world, this.atlasCanvas);
     this.inventory = new Inventory();
     this.cursor = null;
+    this.wheelAcc = 0;
     this.craft2 = new Array(4).fill(null);
     this.craft3 = new Array(9).fill(null);
     this.furnaces = new Map();
@@ -255,8 +259,15 @@ class Game {
 
     window.addEventListener('wheel', (e) => {
       if (!this.locked) return;
-      const d = e.deltaY > 0 ? 1 : -1;
-      this.inventory.selected = (this.inventory.selected + d + HOTBAR_SIZE) % HOTBAR_SIZE;
+      // 按累计滚动量步进，而不是按事件个数。触控板一次轻扫会发十几个小 deltaY，
+      // 原来每个事件都当一整格 → 轻扫一下就绕热键栏一整圈。普通鼠标一格（100）仍是一格。
+      this.wheelAcc += e.deltaMode === 0 ? e.deltaY : (e.deltaY > 0 ? WHEEL_NOTCH : -WHEEL_NOTCH);
+      if (this.wheelAcc > WHEEL_NOTCH * MAX_WHEEL_STEPS) this.wheelAcc = WHEEL_NOTCH * MAX_WHEEL_STEPS;
+      if (this.wheelAcc < -WHEEL_NOTCH * MAX_WHEEL_STEPS) this.wheelAcc = -WHEEL_NOTCH * MAX_WHEEL_STEPS;
+      const steps = Math.trunc(this.wheelAcc / WHEEL_NOTCH);
+      if (steps === 0) return;
+      this.wheelAcc -= steps * WHEEL_NOTCH;
+      this.inventory.selected = (this.inventory.selected + steps + HOTBAR_SIZE * 2) % HOTBAR_SIZE;
       this.ui.render();
     });
 

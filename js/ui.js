@@ -494,6 +494,8 @@ export class UI {
     for (const el of this.slotViews) {
       const area = el.dataset.area;
       const index = parseInt(el.dataset.index, 10);
+      // 面板底部那条热键栏也要标出手持格，否则开着背包根本看不出手里拿的是哪格
+      if (area === 'inv') el.classList.toggle('sel', index === g.inventory.selected);
       this.updateSlot(el, this.getStack(area, index));
     }
     if (this.mode === 'furnace' && this.furnace) {

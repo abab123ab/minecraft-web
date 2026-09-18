@@ -409,6 +409,59 @@ const dmgKeep = await ev(`(async function(){
 check('工具 Shift 转移后耐久保留（25）', dmgKeep.movedDmg === 25, JSON.stringify(dmgKeep));
 check('工具从光标归还后耐久保留（33）', dmgKeep.bagDmg === 33, JSON.stringify(dmgKeep));
 
+// ---- 12 背包界面里要能看出哪一格是手持格 ----
+const panelSel = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const ui = g.ui;
+  if (ui.isOpen()) ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  ui.open('inventory');
+  const marked = () => [...document.querySelectorAll('#panel .slot.sel')].map((e) => e.dataset.area + ':' + e.dataset.index);
+  g.inventory.selected = 3; ui.render();
+  const at3 = marked();
+  g.inventory.selected = 7; ui.render();
+  const at7 = marked();
+  g.inventory.selected = 0; ui.render();
+  ui.close();
+  return { at3, at7 };
+})()`);
+check('背包界面：手持格有高亮', panelSel.at3.length === 1 && panelSel.at3[0] === 'inv:3', JSON.stringify(panelSel));
+check('背包界面：换手持格后高亮跟着走', panelSel.at7.length === 1 && panelSel.at7[0] === 'inv:7', JSON.stringify(panelSel));
+
+// ---- 13 滚轮按累计滚动量步进，而不是按事件个数 ----
+// 触控板一次轻扫会发十几个小 deltaY。改之前每个事件都算一整格，轻扫一下就绕热键栏一整圈。
+const wheel = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const prevLocked = g.locked;
+  g.locked = true;
+  // 数「跳了几格」而不是「几个事件改变了 selected」：一个事件也可能跳 4 格
+  const steps = (n, d) => {
+    let moved = 0;
+    for (let i = 0; i < n; i++) {
+      const before = g.inventory.selected;
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: d, bubbles: true }));
+      let delta = g.inventory.selected - before;
+      if (delta < 0) delta += inv.HOTBAR_SIZE;
+      moved += delta;
+    }
+    return moved;
+  };
+  g.inventory.selected = 0; const notch = steps(1, 100);
+  g.inventory.selected = 0; const flick = steps(12, 12);
+  g.inventory.selected = 0; const three = steps(3, 100);
+  g.inventory.selected = 0; const huge = steps(1, 1200);
+  g.wheelAcc = 0; g.inventory.selected = 0;
+  g.locked = prevLocked;
+  return { notch, flick, three, huge };
+})()`);
+check('滚轮：普通鼠标一格 = 切 1 格', wheel.notch === 1, JSON.stringify(wheel));
+check('滚轮：触控板轻扫（滚动量 144 分 12 次）= 切 1 格，不是 12 格', wheel.flick === 1, JSON.stringify(wheel));
+check('滚轮：连滚三格 = 切 3 格', wheel.three === 3, JSON.stringify(wheel));
+check('滚轮：单次超大 delta 最多跳 4 格', wheel.huge === 4, JSON.stringify(wheel));
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {
