@@ -2,6 +2,12 @@ import { fbm2, ridged2, perlin3, hash2 } from './noise.js';
 import { BLOCKS, AIR } from './blocks.js';
 import { CHUNK, HEIGHT, SEA } from './worlddef.js';
 
+// 矿石密度总开关：所有矿的 veins 都乘这个数。想让矿更多/更少，只改这一个值。
+// 1.0 是标定后的基准（总矿化率 ≈ 12% 的石头），改动后用 tools/oredist.mjs 复核。
+const ORE_DENSITY = 1.0;
+// 基岩逐层概率：y=0 必须 1.0，否则玩家会挖穿世界底掉出去。y=1..4 递减成齿状。
+const BEDROCK_CHANCE = [1, 0.72, 0.48, 0.22, 0.06];
+
 export const B = {};
 function bid(key) { return BLOCKS.findIndex((b) => b.key === key); }
 [
@@ -11,6 +17,73 @@ function bid(key) { return BLOCKS.findIndex((b) => b.key === key); }
   'gold_ore', 'diamond_ore', 'copper_ore', 'redstone_ore', 'lapis_ore', 'emerald_ore',
   'obsidian', 'bedrock', 'water', 'wool', 'torch'
 ].forEach((k) => { B[k] = bid(k); });
+
+// 矿石层带表。三个 y 值定义「三角形分布」：minY 和 maxY 处密度为 0、peakY 处最高。
+// 单调斜坡（越深越多）是错的：煤应该最浅最普遍，钻石才对深度敏感。
+//   veins = 每个区块平均撒几个锚点（可以是小数，7.5 表示有一半区块多长一条）
+//   size  = 单条脉最多几格，硬上限——这是「不会长出上百格巨型矿脉」的保证
+// 顺序有讲究：稀有的排前面，先占位置，免得钻石/绿宝石的格子被煤抢走。
+// 表里的 veins 是按「总矿化率 ≈ 12% 的石头」标定过的，改动后用 tools/oredist.mjs 复核。
+export const ORE_TABLE = [
+  { seed: 81, block: B.emerald_ore,  minY: 40, peakY: 58, maxY: 74, veins: 18,   size: 4,  biome: 'mountains' },
+  { seed: 44, block: B.diamond_ore,  minY: 1,  peakY: 3,  maxY: 14, veins: 2.8,  size: 8 },
+  { seed: 71, block: B.lapis_ore,    minY: 1,  peakY: 7,  maxY: 22, veins: 3.6,  size: 8 },
+  { seed: 61, block: B.redstone_ore, minY: 1,  peakY: 4,  maxY: 16, veins: 7.2,  size: 9 },
+  { seed: 33, block: B.gold_ore,     minY: 1,  peakY: 8,  maxY: 24, veins: 3.8,  size: 9 },
+  { seed: 22, block: B.iron_ore,     minY: 2,  peakY: 12, maxY: 44, veins: 14.3, size: 10 },
+  { seed: 51, block: B.copper_ore,   minY: 4,  peakY: 18, maxY: 48, veins: 8.6,  size: 11 },
+  { seed: 11, block: B.coal_ore,     minY: 2,  peakY: 26, maxY: 64, veins: 27,   size: 14 }
+];
+
+const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+const IS_ORE = new Uint8Array(BLOCKS.length);
+for (const o of ORE_TABLE) IS_ORE[o.block] = 1;
+
+// 三角形分布反采样：把 [0,1) 的随机数映射成 y，峰值落在 peakY，两端 minY/maxY 收到 0。
+function veinY(o, u) {
+  const left = o.peakY - o.minY, right = o.maxY - o.peakY, total = left + right;
+  if (total <= 0) return o.minY;
+  if (u * total < left) return o.minY + Math.round(Math.sqrt(u * left * total));
+  return o.maxY - Math.round(Math.sqrt((1 - u) * right * total));
+}
+
+// 这一格的 6 个邻居里有没有别的矿脉。
+function touchesOre(data, lx, y, lz) {
+  for (let d = 0; d < 6; d++) {
+    const ny = y + DIRS[d][1];
+    if (ny < 0 || ny >= HEIGHT) continue;
+    const nx = lx + DIRS[d][0], nz = lz + DIRS[d][2];
+    if (nx < 0 || nx >= CHUNK || nz < 0 || nz >= CHUNK) continue;
+    if (IS_ORE[data[nx + CHUNK * (nz + CHUNK * ny)]]) return true;
+  }
+  return false;
+}
+
+// 从锚点长一条矿脉：每次从已长出的格子里随机挑一格、随机挑一个方向，是石头就变成矿。
+// 新格子不许紧挨着别的矿脉——否则两条独立的脉会粘成一坨，统计出来的「一脉」就变成上百格。
+// 先攒在 cells 里、最后一次性写进 data，中途就能靠「已写进去的」判断哪些是别的脉。
+// 长满 o.size 格或试够次数就停，size 是硬上限。
+function placeVein(data, lx, lz, ay, o, hx, hv, hz) {
+  const cells = [lx + CHUNK * (lz + CHUNK * ay)];
+  for (let step = 0; cells.length < o.size && step < o.size * 6; step++) {
+    const from = cells[(hash3(hx, hv, hz, o.seed + 500 + step) * cells.length) | 0];
+    const fy = (from / (CHUNK * CHUNK)) | 0;
+    const r = from - fy * CHUNK * CHUNK;
+    const fz = (r / CHUNK) | 0;
+    const fx = r - fz * CHUNK;
+    const d = (hash3(hx, hv + step, hz, o.seed + 900) * 6) | 0;
+    const nx = fx + DIRS[d][0], ny = fy + DIRS[d][1], nz = fz + DIRS[d][2];
+    if (nx < 0 || nx >= CHUNK || nz < 0 || nz >= CHUNK) continue;
+    if (ny < 1 || ny >= HEIGHT) continue;
+    const nidx = nx + CHUNK * (nz + CHUNK * ny);
+    if (data[nidx] !== B.stone) continue;
+    if (cells.indexOf(nidx) >= 0) continue;
+    if (touchesOre(data, nx, ny, nz)) continue;
+    cells.push(nidx);
+  }
+  for (let i = 0; i < cells.length; i++) data[cells[i]] = o.block;
+}
 
 function hash3(x, y, z, s) {
   let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(z | 0, 1274126177) + (s | 0);
@@ -125,60 +198,34 @@ export function generateChunk(ch) {
     }
   }
 
-  // Per-layer ore generation. Rare-first so deeper ores don't get starved by coal/copper.
-  const ORE_TABLE = [
-    { seed: 81, block: B.emerald_ore, minY: 6,  maxY: 34, pTop: 0.004, pBot: 0.009 },
-    { seed: 44, block: B.diamond_ore, minY: 2,  maxY: 15, pTop: 0.005, pBot: 0.013 },
-    { seed: 71, block: B.lapis_ore,   minY: 6,  maxY: 36, pTop: 0.008, pBot: 0.016 },
-    { seed: 61, block: B.redstone_ore,minY: 2,  maxY: 20, pTop: 0.015, pBot: 0.030 },
-    { seed: 33, block: B.gold_ore,    minY: 3,  maxY: 24, pTop: 0.010, pBot: 0.020 },
-    { seed: 22, block: B.iron_ore,    minY: 3,  maxY: 40, pTop: 0.020, pBot: 0.040 },
-    { seed: 51, block: B.copper_ore,  minY: 6,  maxY: 50, pTop: 0.030, pBot: 0.050 },
-    { seed: 11, block: B.coal_ore,    minY: 6,  maxY: 52, pTop: 0.040, pBot: 0.065 }
-  ];
-  for (let lz = 0; lz < CHUNK; lz++) {
-    for (let lx = 0; lx < CHUNK; lx++) {
-      const x = ox + lx, z = oz + lz;
-      const h = surface[lx + CHUNK * lz];
-      for (let y = 1; y <= h; y++) {
-        const idx = lx + CHUNK * (lz + CHUNK * y);
-        if (data[idx] !== B.stone) continue;
-        for (const o of ORE_TABLE) {
-          if (y < o.minY || y > o.maxY) continue;
-          const depth = (o.maxY - y) / (o.maxY - o.minY);
-          const p = o.pTop + (o.pBot - o.pTop) * depth;
-          if (hash3(x >> 1, y >> 1, z >> 1, o.seed) < p) { data[idx] = o.block; break; }
-        }
+  // 矿石：每种矿在每个区块撒 veins 个锚点，y 按三角形分布抽，锚点必须落在石头里。
+  // 锚点落在空中或洞穴里就换个位置重抽，重抽 4 次都落不进石头，这条脉作废（山地部分出界也靠这个兜住）。
+  for (const o of ORE_TABLE) {
+    const nf = o.veins * ORE_DENSITY;
+    const n = Math.floor(nf) + (hash3(ox, 7, oz, o.seed + 5000) < nf - Math.floor(nf) ? 1 : 0);
+    for (let v = 0; v < n; v++) {
+      for (let t = 0; t < 4; t++) {
+        const lx = (hash3(ox, v * 2 + t * 5000, oz, o.seed + 1) * CHUNK) | 0;
+        const lz = (hash3(ox, v * 2 + 1 + t * 5000, oz, o.seed + 2) * CHUNK) | 0;
+        const ay = veinY(o, hash3(ox, v + t * 7000, oz, o.seed + 3));
+        if (ay < 1 || ay >= HEIGHT) continue;
+        if (o.biome && biomeAt(ox + lx, oz + lz) !== o.biome) continue;
+        if (data[lx + CHUNK * (lz + CHUNK * ay)] !== B.stone) continue;
+        if (touchesOre(data, lx, ay, lz)) continue;
+        placeVein(data, lx, lz, ay, o, ox, v * 4 + t, oz);
+        break;
       }
     }
   }
 
-  // 把零散矿石扩成小矿脉（确定性，2 轮），让连锁挖矿能连成团块
-  const ORE_IDS = new Set([
-    B.coal_ore, B.copper_ore, B.iron_ore, B.gold_ore,
-    B.redstone_ore, B.lapis_ore, B.emerald_ore, B.diamond_ore
-  ]);
-  const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-  for (let pass = 0; pass < 2; pass++) {
+  // 基岩放在洞穴之后：洞穴从 y=2 起挖，会掏空底部，基岩必须在最后把底封回来，
+  // 否则玩家能挖穿世界掉出去。y=0 全满，y=1..4 逐层递减成齿状（原版风格）。
+  for (let y = 0; y < BEDROCK_CHANCE.length; y++) {
+    const chance = BEDROCK_CHANCE[y];
     for (let lz = 0; lz < CHUNK; lz++) {
       for (let lx = 0; lx < CHUNK; lx++) {
-        const x = ox + lx, z = oz + lz;
-        const h = surface[lx + CHUNK * lz];
-        for (let y = 1; y <= h; y++) {
-          const idx = lx + CHUNK * (lz + CHUNK * y);
-          const id = data[idx];
-          if (!ORE_IDS.has(id)) continue;
-          if (hash3(x >> 1, y >> 1, z >> 1, 97 + pass * 13 + id) >= 0.4) continue;
-          const d = (hash3(x >> 1, y >> 1, z >> 1, 151 + pass * 13 + id) * 6) | 0;
-          const dir = DIRS[d];
-          const ny = y + dir[1];
-          if (ny < 1 || ny > h) continue;
-          const nx = x + dir[0], nz = z + dir[2];
-          const lxx = nx - ox, lzz = nz - oz;
-          if (lxx < 0 || lxx >= CHUNK || lzz < 0 || lzz >= CHUNK) continue;
-          const nidx = lxx + CHUNK * (lzz + CHUNK * ny);
-          if (data[nidx] === B.stone) data[nidx] = id;
-        }
+        if (chance < 1 && hash3(ox + lx, y, oz + lz, 7331) >= chance) continue;
+        data[lx + CHUNK * (lz + CHUNK * y)] = B.bedrock;
       }
     }
   }

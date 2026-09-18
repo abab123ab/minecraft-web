@@ -162,7 +162,9 @@ const gen = await ev(`(async function(){
   }
   return { counts, byY };
 })()`);
-check('生成中至少存在 4 种新矿石', ['copper_ore','redstone_ore','lapis_ore','emerald_ore'].filter((k) => gen.counts[k] > 0).length >= 4, JSON.stringify(gen.counts));
+// 绿宝石是山地专属矿（worldgen 里靠 biome == 'mountains' 卡），出生点附近基本不是山地，
+// 所以这里只验不挑群系的那三种。绿宝石在山地里的产量由 oredist.mjs 第七节单独负责。
+check('生成中至少存在 3 种新矿石（铜/红石/青金石）', ['copper_ore','redstone_ore','lapis_ore'].filter((k) => gen.counts[k] > 0).length >= 3, JSON.stringify(gen.counts));
 check('深层有钻石/红石（y<=15）', (gen.byY[15] && (gen.byY[15].diamond_ore || 0) + (gen.byY[15].redstone_ore || 0) > 0) || (gen.byY[10] && (gen.byY[10].diamond_ore || 0) + (gen.byY[10].redstone_ore || 0) > 0), JSON.stringify(gen.byY[10] || gen.byY[15]));
 
 // ---- C 连锁挖矿：挖一块连着的煤矿会清掉相邻矿脉 ----
