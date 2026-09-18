@@ -188,12 +188,14 @@ export class World {
   }
 
   buildSection(ch, si) {
+    // 必须先算光再建面：网格的顶点色取自面外侧那一格的光照，
+    // 顺序反了的话新区块首次建面只能读到全 0，被迫靠邻块触发重建才变对。
+    computeSectionLight(ch, si);
     const ctx = {
       getChunk: (cx, cz) => this.chunks.get(this.key(cx, cz)),
       useAO: this.useAO
     };
     const { opaque, water, glass } = buildSectionBatches(ch, si, ctx);
-    computeSectionLight(ch, si);
     setSectionMesh(this.scene, ch, si, 'o', opaque, this.matOpaque, 0);
     setSectionMesh(this.scene, ch, si, 'g', glass, this.matGlass, 1);
     setSectionMesh(this.scene, ch, si, 'w', water, this.matWater, 2);

@@ -39,20 +39,32 @@ function solidForAO(id) {
 
 export function buildSectionBatches(ch, si, ctx) {
   const grid = [];
+  const skyGrid = [];
+  const litGrid = [];
   for (let j = -1; j <= 1; j++) {
     for (let i = -1; i <= 1; i++) {
       const n = ctx.getChunk(ch.cx + i, ch.cz + j);
       grid.push(n ? n.data : null);
+      skyGrid.push(n ? n.skyLight : null);
+      litGrid.push(n ? n.blockLight : null);
     }
   }
-  const get = (x, y, z) => {
-    if (y < 0 || y >= HEIGHT) return AIR;
+  const pick = (arrs, x, y, z) => {
+    if (y < 0 || y >= HEIGHT) return null;
     const ix = x < 0 ? 0 : (x > 15 ? 2 : 1);
     const iz = z < 0 ? 0 : (z > 15 ? 2 : 1);
-    const arr = grid[iz * 3 + ix];
-    if (!arr) return AIR;
+    const arr = arrs[iz * 3 + ix];
+    if (!arr) return null;
     return arr[(x - (ix - 1) * 16) + CHUNK * ((z - (iz - 1) * 16) + CHUNK * y)];
   };
+  const get = (x, y, z) => {
+    const v = pick(grid, x, y, z);
+    return v === null ? AIR : v;
+  };
+  // 光照只存在于非通透方块里：computeSectionLight 不会往不透明方块内部写光，
+  // 所以取光必须看「面外侧那一格」，也就是真正透光的空气/水/玻璃，而不是被建面的实心块自己。
+  const skyAt = (x, y, z) => pick(skyGrid, x, y, z) || 0;
+  const litAt = (x, y, z) => pick(litGrid, x, y, z) || 0;
 
   const opaque = { pos: [], uv: [], col: [], idx: [] };
   const water = { pos: [], uv: [], col: [], idx: [] };
@@ -96,6 +108,19 @@ export function buildSectionBatches(ch, si, ctx) {
           const ao = [0, 0, 0, 0];
           const aboveAir = get(x, y + 1, z) === AIR;
           const waterTop = block.liquid && aboveAir ? 0.875 : 1;
+
+          const ndx = x + face.dir[0], ndy = y + face.dir[1], ndz = z + face.dir[2];
+          const skyL = skyAt(ndx, ndy, ndz);
+          const litL = litAt(ndx, ndy, ndz);
+          // 天光与方块光取较大者，不能相加：相加会让 lv 超过 1，
+          // r/g 先被 min(1,...) 截断而 b 不会，火把区就会由暖色反转成冷色，同时整体双重计亮。
+          let lv = Math.max(skyL, litL) / 15;
+          if (lv < 0.30) lv = 0.30;
+          const warm = Math.max(0, litL - skyL) / 15;
+          const cr = Math.min(1, lv + warm * 0.18);
+          const cg = Math.min(1, lv + warm * 0.06);
+          const cb = Math.max(0, lv - warm * 0.06);
+
           for (let v = 0; v < 4; v++) {
             const vtx = face.verts[v];
             const uvs = face.uvs[v];
@@ -126,24 +151,13 @@ export function buildSectionBatches(ch, si, ctx) {
             ao[v] = aoLevel;
 
             const aof = 0.55 + 0.15 * ao[v];
-            const idxHere = x + CHUNK * (z + CHUNK * y);
-            const skyL = ch.skyLight[idxHere];
-            const litL = ch.blockLight[idxHere];
-            const skyV = skyL / 15;
-            const litV = litL / 15;
-            let lv = skyV + litV;
-            if (lv < 0.30) lv = 0.30;
-            const warm = Math.max(0, litL - skyL) / 15;
-            const r = Math.min(1, lv + warm * 0.18);
-            const g = Math.min(1, lv + warm * 0.06);
-            const b = Math.max(0, lv - warm * 0.06);
             const shade = face.shade * aof;
             target.pos.push(px, py, pz);
             target.uv.push(
               uvR.u0 + (uvR.u1 - uvR.u0) * uvs[0],
               uvR.v0 + (uvR.v1 - uvR.v0) * uvs[1]
             );
-            target.col.push(r * shade, g * shade, b * shade);
+            target.col.push(cr * shade, cg * shade, cb * shade);
           }
 
           if (ao[0] + ao[2] > ao[1] + ao[3]) {
