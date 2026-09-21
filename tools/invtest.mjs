@@ -793,6 +793,191 @@ check('按住 F 飞行开关只翻一次', keyRepeat.f1 === true && keyRepeat.f2
 check('按住 O 遮蔽开关只翻一次', keyRepeat.o1 === false && keyRepeat.o2 === false, JSON.stringify(keyRepeat));
 check('按住 Q 连丢 4 个（跟手）', keyRepeat.qLeft === 4 && keyRepeat.qGround === 4, JSON.stringify(keyRepeat));
 
+// ---- 20 掉落物要带着耐久，捡回来不能变全新 ----
+const dropDmg = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const pick = items.ITEM_BY_KEY['iron_pickaxe'];
+  if (g.ui.isOpen()) g.ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.dropped.clear();
+
+  // 原地丢一个用过的镐，等它被自动吸回来
+  const p = g.player.pos;
+  g.dropped.spawn(pick.id, 1, p.x, p.y + 1.0, p.z, { x:0, y:0, z:0 }, 77);
+  const hasDmgField = Object.prototype.hasOwnProperty.call(g.dropped.list[0], 'dmg');
+  await new Promise(r => setTimeout(r, 1300));
+  const back = g.inventory.slots.find(s => s && s.id === pick.id);
+
+  // Q 丢出去的也得带上当前耐久
+  g.dropped.clear();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.selected = 0;
+  g.inventory.slots[0] = inv.makeStack(pick.id, 1, 44);
+  window.dispatchEvent(new KeyboardEvent('keydown', { code:'KeyQ', ctrlKey:true, bubbles:true }));
+  const thrownDmg = g.dropped.list.length ? g.dropped.list[0].dmg : -1;
+
+  // 方块掉落物（不带耐久）依然能正常捡
+  const coalId = items.ITEM_BY_KEY['coal'].id;
+  g.dropped.clear();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.dropped.spawn(coalId, 3, p.x, p.y + 1.0, p.z, { x:0, y:0, z:0 });
+  await new Promise(r => setTimeout(r, 1300));
+  const coalBack = g.inventory.slots.reduce((a,s)=>a + (s && s.id===coalId ? s.count : 0), 0);
+
+  g.dropped.clear();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  return { hasDmgField, backDmg: back ? back.dmg : 'not-picked', thrownDmg, coalBack, max: pick.tool.durability };
+})()`);
+check('掉落物带耐久字段', dropDmg.hasDmgField === true, JSON.stringify(dropDmg));
+check('工具丢地上捡回来耐久不变（77，不是 0）', dropDmg.backDmg === 77, JSON.stringify(dropDmg));
+check('Q 丢出去的工具带耐久（44）', dropDmg.thrownDmg === 44, JSON.stringify(dropDmg));
+check('不带耐久的方块掉落物照常捡（3 个煤炭）', dropDmg.coalBack === 3, JSON.stringify(dropDmg));
+
+// ---- 21 界面开着时滚轮也能切热键栏 ----
+const wheelUi = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const ui = g.ui;
+  if (ui.isOpen()) ui.close();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.cursor = null;
+  const wasLocked = g.locked;
+  // 开背包会主动解除指针锁，真实场景里这一刻 locked 就是 false
+  g.locked = false;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.slots[1] = inv.makeStack((await import('/js/items.js')).ITEM_BY_KEY['dirt'].id, 5, 0);
+  g.inventory.selected = 0;
+  g.ui.showHint('');
+  const hintEl = document.getElementById('item-hint');
+
+  ui.open('inventory');
+  window.dispatchEvent(new WheelEvent('wheel', { deltaY:100, deltaMode:0, bubbles:true }));
+  const withUi = g.inventory.selected;
+  const hintWhileUi = hintEl.textContent;
+  ui.close();
+
+  // 界面关着又没有指针锁 → 不该响应（回归）
+  window.dispatchEvent(new WheelEvent('wheel', { deltaY:100, deltaMode:0, bubbles:true }));
+  const noLock = g.inventory.selected;
+
+  g.inventory.selected = 0;
+  g.locked = wasLocked;
+  g.ui.showHint('');
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  return { withUi, hintWhileUi, noLock };
+})()`);
+check('界面开着滚轮能切热键栏（0→1）', wheelUi.withUi === 1, JSON.stringify(wheelUi));
+check('界面开着滚轮不弹手持物品名', wheelUi.hintWhileUi === '', JSON.stringify(wheelUi));
+check('界面关着且没指针锁时滚轮不响应（回归）', wheelUi.noLock === 1, JSON.stringify(wheelUi));
+
+// ---- 22 背包里的护甲 shift 点击 = 直接穿上 ----
+const armorShift = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const helm = items.ITEM_BY_KEY['leather_helmet'];
+  const chest = Object.keys(items.ITEM_BY_KEY).map(k=>items.ITEM_BY_KEY[k]).find(i=>i.armor && i.armor.slot===1);
+  if (!helm || !chest) return { missing: true, helmKs: !!helm, chestKs: !!chest };
+  if (ui.isOpen()) ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.armor = [null,null,null,null];
+  ui.open('inventory');
+  const click = (area, index) => [...document.querySelectorAll('#panel .slot')]
+    .find(e => e.dataset.area===area && e.dataset.index===String(index))
+    .dispatchEvent(new MouseEvent('mousedown', { bubbles:true, button:0, shiftKey:true }));
+
+  g.inventory.slots[20] = inv.makeStack(helm.id, 1, 0);
+  click('inv', 20);
+  const equippedHead = g.inventory.armor[0] ? g.inventory.armor[0].id : -1;
+  const bagAfter = g.inventory.slots[20] ? g.inventory.slots[20].id : -1;
+
+  g.inventory.slots[25] = inv.makeStack(chest.id, 1, 0);
+  click('inv', 25);
+  const equippedChest = g.inventory.armor[1] ? g.inventory.armor[1].id : -1;
+
+  // 身上那件 shift 点击 = 脱回背包
+  click('armor', 0);
+  const headBack = g.inventory.slots.some(s => s && s.id === helm.id);
+  const headSlotEmpty = g.inventory.armor[0] === null;
+
+  ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.armor = [null,null,null,null];
+  return { equippedHead, bagAfter, equippedChest, headBack, headSlotEmpty, helmId: helm.id, chestId: chest.id };
+})()`);
+check('护甲 shift 点击直接穿上（不再只挪到热键栏）', armorShift.equippedHead === armorShift.helmId && armorShift.bagAfter === -1, JSON.stringify(armorShift));
+check('护甲 shift 点击：胸甲进对应槽位', armorShift.equippedChest === armorShift.chestId, JSON.stringify(armorShift));
+check('护甲 shift 点击：身上那件能脱回背包', armorShift.headBack === true && armorShift.headSlotEmpty === true, JSON.stringify(armorShift));
+
+// ---- 23 界面开着时按 1-9 = 悬停格与对应热键栏格交换 ----
+const numSwap = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const dirt = items.ITEM_BY_KEY['dirt'].id;
+  const coal = items.ITEM_BY_KEY['coal'].id;
+  const fire = (code) => window.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles:true }));
+  if (ui.isOpen()) ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  ui.open('inventory');
+  g.inventory.selected = 0;
+
+  g.inventory.slots[20] = inv.makeStack(dirt, 20, 0);
+  g.inventory.slots[6] = inv.makeStack(coal, 7, 0);
+  ui.hover = { area:'inv', index:20 };
+  fire('Digit7');
+  const swapped = { selected: g.inventory.selected,
+    s20: g.inventory.slots[20] ? g.inventory.slots[20].id : -1,
+    s6: g.inventory.slots[6] ? g.inventory.slots[6].id : -1,
+    s20n: g.inventory.slots[20] ? g.inventory.slots[20].count : -1 };
+
+  // 悬停的就是目标热键栏格本身 → 只换手持，物品不动
+  g.inventory.slots[3] = inv.makeStack(dirt, 20, 0);
+  ui.hover = { area:'inv', index:3 };
+  fire('Digit4');
+  const self = { selected: g.inventory.selected, s3: g.inventory.slots[3] ? g.inventory.slots[3].count : -1 };
+
+  // 界面关着按 1-9：只换手持（回归）
+  ui.close();
+  g.inventory.selected = 0;
+  ui.hover = { area:'inv', index:3 };
+  fire('Digit4');
+  const closed = { selected: g.inventory.selected, s3: g.inventory.slots[3] ? g.inventory.slots[3].count : -1 };
+
+  // 悬停产物格 → 不给换
+  ui.open('inventory');
+  g.inventory.slots[5] = inv.makeStack(dirt, 4, 0);
+  ui.hover = { area:'result', index:0 };
+  const onResult = ui.swapWithHotbar(5);
+
+  // 悬停防具格 → 能跟热键栏换
+  g.inventory.armor = [null,null,null,null];
+  g.inventory.slots[8] = inv.makeStack(coal, 3, 0);
+  ui.hover = { area:'armor', index:0 };
+  const onArmor = ui.swapWithHotbar(8);
+  const armorMoved = g.inventory.armor[0] ? g.inventory.armor[0].id : -1;
+
+  ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.armor = [null,null,null,null];
+  return { swapped, self, closed, onResult, onArmor, armorMoved, dirt, coal };
+})()`);
+check('界面开着 1-9：悬停格与热键栏格互换', numSwap.swapped.s20 === numSwap.coal && numSwap.swapped.s6 === numSwap.dirt && numSwap.swapped.s20n === 7, JSON.stringify(numSwap));
+check('界面开着 1-9：手持格跟着切过去', numSwap.swapped.selected === 6, JSON.stringify(numSwap));
+check('界面开着 1-9：悬停的就是那一格时物品不动', numSwap.self.s3 === 20 && numSwap.self.selected === 3, JSON.stringify(numSwap));
+check('界面关着 1-9：只换手持不动物品（回归）', numSwap.closed.s3 === 20 && numSwap.closed.selected === 3, JSON.stringify(numSwap));
+check('界面开着 1-9：产物格不给换', numSwap.onResult === false, JSON.stringify(numSwap));
+check('界面开着 1-9：防具格也能换', numSwap.onArmor === true && numSwap.armorMoved === numSwap.coal, JSON.stringify(numSwap));
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {

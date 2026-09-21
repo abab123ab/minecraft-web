@@ -30,7 +30,7 @@ export class DroppedItems {
     return t;
   }
 
-  spawn(id, count, x, y, z, vel) {
+  spawn(id, count, x, y, z, vel, dmg) {
     const mat = new THREE.SpriteMaterial({ map: this.textureFor(id), transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(mat);
     sprite.scale.set(0.01, 0.01, 1);
@@ -38,7 +38,7 @@ export class DroppedItems {
     sprite.renderOrder = 3;
     this.scene.add(sprite);
     this.list.push({
-      id, count,
+      id, count, dmg: dmg || 0,
       pos: new THREE.Vector3(x, y, z),
       vel: new THREE.Vector3(vel ? vel.x : (Math.random() - 0.5) * 1.6,
         vel ? vel.y : 3.2,
@@ -91,7 +91,7 @@ export class DroppedItems {
           p.z += (dz / d) * pull * 2;
           e.sprite.position.set(p.x, p.y, p.z);
           if (d < 0.7) {
-            const left = inventory.add(e.id, e.count);
+            const left = inventory.add(e.id, e.count, e.dmg);
             if (left < e.count) {
               const taken = e.count - left;
               if (onPickup) onPickup(e.id, taken);

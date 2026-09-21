@@ -416,6 +416,9 @@ export class UI {
     const g = this.game;
     const st = this.getStack(area, index);
     if (!st) return;
+    // 背包里的护甲 shift 点击 = 直接穿上（原版行为）。
+    // 原来只会被当成普通物品挪到热键栏第一格，戴着的位置反而空着。
+    if (area === 'inv' && ITEMS[st.id].armor && g.inventory.equip(index)) return;
     let left;
     if (area === 'inv') {
       const toHotbar = index >= HOTBAR_SIZE;
@@ -563,7 +566,7 @@ export class UI {
       const n = whole ? cur.count : 1;
       cur.count -= n;
       if (cur.count <= 0) g.cursor = null;
-      g.spawnDrop(cur.id, n);
+      g.spawnDrop(cur.id, n, cur.dmg);
       this.render();
       return true;
     }
@@ -574,8 +577,22 @@ export class UI {
     const n = whole ? st.count : 1;
     st.count -= n;
     if (st.count <= 0) this.setStack(h.area, h.index, null);
-    g.spawnDrop(st.id, n);
+    g.spawnDrop(st.id, n, st.dmg);
     this.render();
+    return true;
+  }
+
+  // 界面开着时按 1-9：鼠标悬停的那一格和对应热键栏格交换（原版 1.8+ 的标准操作）。
+  // 悬停的就是那一格本身不用换；产物格不给换（换了等于白烧）。
+  swapWithHotbar(hot) {
+    const g = this.game;
+    const h = this.hover;
+    if (!h || h.area === 'result' || h.area === 'fout') return false;
+    if (h.area === 'inv' && h.index === hot) return false;
+    const from = this.getStack(h.area, h.index) || null;
+    const to = g.inventory.slots[hot] || null;
+    this.setStack(h.area, h.index, to);
+    g.inventory.slots[hot] = from;
     return true;
   }
 

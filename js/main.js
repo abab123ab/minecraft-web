@@ -268,7 +268,10 @@ class Game {
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
     window.addEventListener('wheel', (e) => {
-      if (!this.locked) return;
+      // 界面开着时也要能滚：开背包会主动解除指针锁，只判 locked 的话滚轮就整个哑了，
+      // 而原版是开着背包照样能切热键栏的。
+      const uiOpen = this.ui.isOpen();
+      if (!this.locked && !uiOpen) return;
       // 按累计滚动量步进，而不是按事件个数。触控板一次轻扫会发十几个小 deltaY，
       // 原来每个事件都当一整格 → 轻扫一下就绕热键栏一整圈。普通鼠标一格（100）仍是一格。
       this.wheelAcc += e.deltaMode === 0 ? e.deltaY : (e.deltaY > 0 ? WHEEL_NOTCH : -WHEEL_NOTCH);
@@ -279,7 +282,8 @@ class Game {
       this.wheelAcc -= steps * WHEEL_NOTCH;
       this.inventory.selected = (this.inventory.selected + steps + HOTBAR_SIZE * 2) % HOTBAR_SIZE;
       this.ui.render();
-      this.showHeldName();
+      // 背包开着时不弹手持物品名，那是游戏里的提示，糊在面板上很吵
+      if (!uiOpen) this.showHeldName();
     });
 
     window.addEventListener('keydown', (e) => this.onKey(e, true));
@@ -337,6 +341,8 @@ class Game {
     } else if (code.startsWith('Digit')) {
       const n = parseInt(code.slice(5), 10);
       if (n >= 1 && n <= 9) {
+        // 界面开着时按 1-9 = 把鼠标悬停的那一格跟对应热键栏格换一下（原版标准操作）
+        if (this.ui.isOpen()) this.ui.swapWithHotbar(n - 1);
         this.inventory.selected = n - 1;
         this.ui.render();
         this.showHeldName();
@@ -377,20 +383,21 @@ class Game {
     const s = this.inventory.slots[i];
     if (!s) return;
     const n = this.inventory.removeAt(i, whole ? s.count : 1);
-    if (n > 0) this.spawnDrop(s.id, n);
+    if (n > 0) this.spawnDrop(s.id, n, s.dmg);
     this.ui.render();
   }
 
   dropStack(stack) {
-    this.spawnDrop(stack.id, stack.count);
+    this.spawnDrop(stack.id, stack.count, stack.dmg);
   }
 
-  spawnDrop(itemId, count) {
+  // dmg 要一路带到掉落物上：不带的话，用过的镐丢地上再捡回来就变全新（实测 77 损耗 → 0）。
+  spawnDrop(itemId, count, dmg) {
     const p = this.player;
     const dir = this.lookDir();
     this.dropped.spawn(itemId, count, p.pos.x + dir.x * 0.6, p.pos.y + 1.2, p.pos.z + dir.z * 0.6, {
       x: dir.x * 3.5, y: 2.2, z: dir.z * 3.5
-    });
+    }, dmg);
   }
 
   lookDir() {
