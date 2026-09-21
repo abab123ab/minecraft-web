@@ -553,9 +553,20 @@ export class UI {
   }
 
   // 界面开着时按 Q：丢鼠标悬停的那一格，而不是热键栏里手持的那一格。
+  // 光标上提着东西的话优先丢光标上那组 —— 原版就是这样，而且不这样的话，
+  // 从背包里抓起来一组拿到界面外想丢掉，就永远丢不掉了。
   // 产物格和熔炉产物格不给丢（丢了等于白烧）。
   dropHovered(whole) {
     const g = this.game;
+    const cur = g.cursor;
+    if (cur) {
+      const n = whole ? cur.count : 1;
+      cur.count -= n;
+      if (cur.count <= 0) g.cursor = null;
+      g.spawnDrop(cur.id, n);
+      this.render();
+      return true;
+    }
     const h = this.hover;
     if (!h || h.area === 'result' || h.area === 'fout') return false;
     const st = this.getStack(h.area, h.index);

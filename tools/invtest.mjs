@@ -673,6 +673,126 @@ check('切换手持物品：显示物品名', heldName.at3.text === heldName.pic
 check('切换手持物品：可叠物品带数量', heldName.at5.text === heldName.coalLabel + ' \u00d712', JSON.stringify(heldName));
 check('切换手持物品：切到空格不报名字', heldName.at7.text === heldName.coalLabel + ' \u00d712', JSON.stringify(heldName));
 
+// ---- 18 光标上提着东西时，Q 要丢光标上那组 ----
+const dropCursor = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const dirtId = items.ITEM_BY_KEY['dirt'].id;
+  const press = (ctrl) => window.dispatchEvent(new KeyboardEvent('keydown', { code:'KeyQ', ctrlKey: !!ctrl, bubbles:true }));
+  const onGround = () => g.dropped.list.reduce((a,e)=>a+e.count,0);
+  const at = (i) => g.inventory.slots[i] ? g.inventory.slots[i].count : -1;
+  if (ui.isOpen()) ui.close();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.cursor = null;
+
+  // 光标提着 9 个，鼠标悬停在空格上
+  ui.open('inventory');
+  g.cursor = inv.makeStack(dirtId, 9, 0);
+  g.inventory.slots[21] = inv.makeStack(dirtId, 4, 0);
+  ui.hover = { area:'inv', index:22 };
+  g.dropped.clear();
+  press(false);
+  const one = { cursor: g.cursor ? g.cursor.count : 0, ground: onGround(), hovered: at(21) };
+
+  // 悬停格里有东西也一样：先动光标，不许动悬停格
+  ui.hover = { area:'inv', index:21 };
+  g.dropped.clear();
+  press(false);
+  const two = { cursor: g.cursor ? g.cursor.count : 0, ground: onGround(), hovered: at(21) };
+
+  // Ctrl+Q 一次把光标上那组丢光
+  g.dropped.clear();
+  press(true);
+  const ctrl = { cursor: g.cursor ? g.cursor.count : 0, ground: onGround(), hovered: at(21) };
+
+  // 光标空着时，还是丢悬停格（老行为，别退化）
+  ui.hover = { area:'inv', index:21 };
+  g.dropped.clear();
+  press(false);
+  const fallback = { cursor: g.cursor ? g.cursor.count : 0, ground: onGround(), hovered: at(21) };
+
+  // 光标空着时产物格仍然不给丢
+  g.cursor = null;
+  ui.hover = { area:'result', index:0 };
+  g.dropped.clear();
+  const resultBlocked = ui.dropHovered(false);
+
+  ui.close();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.cursor = null;
+  g.dropped.clear();
+  return { one, two, ctrl, fallback, resultBlocked };
+})()`);
+check('Q：光标提着东西时丢光标那组（9→8，地上 1）', dropCursor.one.cursor === 8 && dropCursor.one.ground === 1 && dropCursor.one.hovered === 4, JSON.stringify(dropCursor));
+check('Q：悬停格有东西也先动光标（8→7，悬停格不动）', dropCursor.two.cursor === 7 && dropCursor.two.ground === 1 && dropCursor.two.hovered === 4, JSON.stringify(dropCursor));
+check('Q：Ctrl+Q 把光标那组丢光（地上 7）', dropCursor.ctrl.cursor === 0 && dropCursor.ctrl.ground === 7 && dropCursor.ctrl.hovered === 4, JSON.stringify(dropCursor));
+check('Q：光标空着时回到丢悬停格', dropCursor.fallback.cursor === 0 && dropCursor.fallback.ground === 1 && dropCursor.fallback.hovered === 3, JSON.stringify(dropCursor));
+check('Q：光标空着时产物格仍不给丢', dropCursor.resultBlocked === false, JSON.stringify(dropCursor));
+
+// ---- 19 系统键自动重复：开关/循环键不能被重复触发，只有 Q 跟手 ----
+const keyRepeat = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const fire = (code, repeat, ctrl) => window.dispatchEvent(new KeyboardEvent('keydown', { code, repeat: !!repeat, ctrlKey: !!ctrl, bubbles:true }));
+  if (g.ui.isOpen()) g.ui.close();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.cursor = null;
+  g.dropped.clear();
+
+  // 按住 E：真按一次 + 6 次系统重复，界面状态只能翻一次
+  fire('KeyE', false);
+  const eOpen = g.ui.isOpen();
+  for (let i=0;i<6;i++) fire('KeyE', true);
+  const eHold = g.ui.isOpen();
+  g.ui.close();
+
+  // 按住 R：从 4 只许走到 6，不能一路跳到顶
+  if (g.world.renderDistance !== 4) g.setRenderDistance(4);
+  const r0 = g.world.renderDistance;
+  fire('KeyR', false);
+  const r1 = g.world.renderDistance;
+  for (let i=0;i<6;i++) fire('KeyR', true);
+  const r2 = g.world.renderDistance;
+
+  // 按住 F：飞行开关只能翻一次
+  g.player.flying = false;
+  fire('KeyF', false);
+  const f1 = g.player.flying;
+  for (let i=0;i<6;i++) fire('KeyF', true);
+  const f2 = g.player.flying;
+
+  // 按住 O：遮蔽开关只能翻一次
+  g.setAO(true);
+  fire('KeyO', false);
+  const o1 = g.world.useAO;
+  for (let i=0;i<6;i++) fire('KeyO', true);
+  const o2 = g.world.useAO;
+
+  // 按住 Q：真按一次 + 3 次重复 = 丢 4 个（连丢要跟手）
+  g.inventory.selected = 0;
+  g.inventory.slots[0] = inv.makeStack(items.ITEM_BY_KEY['dirt'].id, 8, 0);
+  g.dropped.clear();
+  fire('KeyQ', false);
+  for (let i=0;i<3;i++) fire('KeyQ', true);
+  const qLeft = g.inventory.slots[0] ? g.inventory.slots[0].count : 0;
+  const qGround = g.dropped.list.reduce((a,e)=>a+e.count,0);
+
+  g.setAO(true);
+  g.setRenderDistance(4);
+  g.player.flying = false;
+  g.inventory.slots[0] = null;
+  g.dropped.clear();
+  return { eOpen, eHold, r0, r1, r2, f1, f2, o1, o2, qLeft, qGround };
+})()`);
+check('按住 E 不会被系统重复开合（开→仍开）', keyRepeat.eOpen === true && keyRepeat.eHold === true, JSON.stringify(keyRepeat));
+check('按住 R 只走一步（4→6，不跳顶）', keyRepeat.r0 === 4 && keyRepeat.r1 === 6 && keyRepeat.r2 === 6, JSON.stringify(keyRepeat));
+check('按住 F 飞行开关只翻一次', keyRepeat.f1 === true && keyRepeat.f2 === true, JSON.stringify(keyRepeat));
+check('按住 O 遮蔽开关只翻一次', keyRepeat.o1 === false && keyRepeat.o2 === false, JSON.stringify(keyRepeat));
+check('按住 Q 连丢 4 个（跟手）', keyRepeat.qLeft === 4 && keyRepeat.qGround === 4, JSON.stringify(keyRepeat));
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {

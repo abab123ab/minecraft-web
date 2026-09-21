@@ -31,6 +31,9 @@ const WHEEL_NOTCH = 100;
 const MAX_WHEEL_STEPS = 4;
 // 按住右键连续放置的间隔，对齐原版（约 0.2 秒一格）
 const USE_REPEAT = 0.2;
+// 按住不放时系统会持续补发 repeat 键。开关/循环类按键被重复触发就是疯狂闪烁：
+// 实测按住 E 是「开-关-开-关」、按住 R 渲染距离从 4 一路跳到顶。只有 Q 该跟手（连丢）。
+const REPEAT_KEYS = new Set(['KeyQ']);
 
 class Game {
   get isDay() { return this.sky.isDay; }
@@ -313,6 +316,7 @@ class Game {
     else if (code === 'ShiftLeft' || code === 'ShiftRight') this.input.sneak = down;
     else if (code === 'ControlLeft' || code === 'ControlRight') this.ctrlSprint = down;
     if (!down) return;
+    if (e.repeat && !REPEAT_KEYS.has(code)) return;
     if (code === 'KeyE') {
       if (this.ui.isOpen()) this.ui.close();
       else { this.ui.open('inventory'); document.exitPointerLock(); }
