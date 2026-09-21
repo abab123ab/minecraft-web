@@ -2,6 +2,9 @@ import { ITEMS, itemIconCanvas, ARMOR_SLOT_KEYS } from './items.js';
 import { matchRecipe } from './crafting.js';
 import { makeStack, maxStack, isTool, INV_SIZE, HOTBAR_SIZE, ARMOR_SIZE } from './inventory.js';
 
+// 两次点击间隔小于这个值就算双击（收拢同种物品）
+const DOUBLE_CLICK_MS = 300;
+
 export class UI {
   constructor(game) {
     this.game = game;
@@ -18,6 +21,9 @@ export class UI {
     this.hintTimer = 0;
     this.hover = null;
     this.mouse = { x: 0, y: 0 };
+    this.press = null;      // 还没落子的那次按下；拖拽分发要等 mouseup 才知道划过哪几格
+    this.dragSlots = [];
+    this.lastClick = null;  // 认双击用
 
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       const el = this.createSlot('inv', i, '');
@@ -26,17 +32,20 @@ export class UI {
       this.hotbarViews.push(el);
     }
 
-    this.panel.addEventListener('mousedown', (e) => this.onSlotMouse(e));
+    this.panel.addEventListener('mousedown', (e) => this.onSlotDown(e));
     this.panel.addEventListener('contextmenu', (e) => e.preventDefault());
     this.panel.addEventListener('mousemove', (e) => {
       const el = e.target.closest('.slot');
       this.hover = el ? { area: el.dataset.area, index: parseInt(el.dataset.index, 10) } : null;
+      if (this.press && this.hover) this.dragTrack(this.hover);
       this.updateTip();
     });
     this.panel.addEventListener('mouseleave', () => {
       this.hover = null;
       this.updateTip();
     });
+    // 松手挂在 window 上：拖到面板外面再松手也要正常落子
+    window.addEventListener('mouseup', () => this.onSlotUp());
     this.root.addEventListener('mousedown', (e) => {
       if (e.target === this.root) this.close();
     });
@@ -85,6 +94,9 @@ export class UI {
     this.mode = null;
     this.furnace = null;
     this.hover = null;
+    this.press = null;
+    this.dragSlots = [];
+    this.lastClick = null;
     this.tipEl.style.display = 'none';
     this.root.classList.add('hidden');
     this.game.onScreenClosed();
@@ -266,7 +278,7 @@ export class UI {
     return m ? makeStack(m.recipe.result, m.recipe.count) : null;
   }
 
-  onSlotMouse(e) {
+  onSlotDown(e) {
     e.preventDefault();
     e.stopPropagation();
     const el = e.target.closest('.slot');
@@ -275,16 +287,127 @@ export class UI {
     const index = parseInt(el.dataset.index, 10);
     const right = e.button === 2;
     const shift = e.shiftKey;
+    const g = this.game;
+
     if (area === 'result') { this.takeResult(right, shift); this.render(); return; }
     if (shift) {
       // 手上已经提着东西时，shift 点合成格 = 把材料铺进空格（老行为，别动）
-      if (area === 'craft' && this.game.cursor) this.interact(area, index, right, shift);
+      if (area === 'craft' && g.cursor) this.interact(area, index, right, shift);
       else this.quickMove(area, index);
       this.render();
       return;
     }
-    this.interact(area, index, right, shift);
+
+    // 双击收拢：第一下已经把物品拿到光标上了，第二下把背包里所有同种物品一起收过来
+    const now = performance.now();
+    const dbl = !right && this.lastClick && this.lastClick.area === area &&
+      this.lastClick.index === index && now - this.lastClick.t < DOUBLE_CLICK_MS;
+    this.lastClick = { area, index, t: now };
+    this.press = null;
+    this.dragSlots = [];
+    if (dbl && g.cursor && !isTool(g.cursor.id)) {
+      this.gather();
+      this.render();
+      return;
+    }
+
+    // 「拿起」类操作不改槽位内容，立刻生效；「往槽里放东西」的那一半留到 mouseup ——
+    // 拖拽分发只有在鼠标划过的过程中才知道要分给哪几格。
+    if (!g.cursor) {
+      this.interact(area, index, right, shift);
+      if (g.cursor) {
+        this.press = { area, index, right, picked: true };
+        this.dragSlots = [{ area, index }];
+      }
+    } else {
+      this.press = { area, index, right, picked: false };
+      this.dragSlots = [{ area, index }];
+    }
     this.render();
+  }
+
+  onSlotUp() {
+    const press = this.press;
+    if (!press) return;
+    this.press = null;
+    const all = this.dragSlots;
+    this.dragSlots = [];
+    if (!this.mode) return;
+    // 起点算不算分发目标：从起点「拿起」的不算 —— 把东西原样放回原处没意义；
+    // 光标本来就提着东西、起点只是要去的那一格，那就算。
+    const targets = press.picked
+      ? all.filter((t) => !(t.area === press.area && t.index === press.index))
+      : all;
+    const placed = this.distribute(targets, press.right);
+    // 一格都没放成（比如起点上是另一种物品，本该做交换）→ 退回普通点击
+    if (placed === 0 && !press.picked) this.interact(press.area, press.index, press.right, false);
+    this.render();
+  }
+
+  dragTrack(h) {
+    const last = this.dragSlots[this.dragSlots.length - 1];
+    if (last && last.area === h.area && last.index === h.index) return;
+    if (this.dragSlots.some((s) => s.area === h.area && s.index === h.index)) return;
+    this.dragSlots.push({ area: h.area, index: h.index });
+  }
+
+  // 这一格能不能收下光标上那个物品（拖拽分发用）。产物格、家具产物格、防具格都不参与。
+  canAccept(area, index, id) {
+    if (area === 'result' || area === 'fout' || area === 'armor') return false;
+    const st = this.getStack(area, index);
+    if (!st) return true;
+    return !isTool(id) && st.id === id && st.count < maxStack(id);
+  }
+
+  // 拖拽分发：右键每格放 1 个；左键把光标上那组按目标格数均分，余数留在光标上。
+  // 返回实际放出去的数量。
+  distribute(targets, right) {
+    const g = this.game;
+    const cur = g.cursor;
+    if (!cur || targets.length === 0) return 0;
+    const usable = targets.filter((t) => this.canAccept(t.area, t.index, cur.id));
+    if (usable.length === 0) return 0;
+    const per = right ? 1 : Math.max(1, Math.floor(cur.count / usable.length));
+    const max = maxStack(cur.id);
+    let placed = 0;
+    for (const t of usable) {
+      if (cur.count <= 0) break;
+      const st = this.getStack(t.area, t.index);
+      const room = st ? max - st.count : max;
+      const put = Math.min(per, room, cur.count);
+      if (put <= 0) continue;
+      if (st) st.count += put;
+      else this.setStack(t.area, t.index, makeStack(cur.id, put, cur.dmg));
+      cur.count -= put;
+      placed += put;
+    }
+    if (cur.count <= 0) g.cursor = null;
+    return placed;
+  }
+
+  // 双击收拢：把背包和合成格里所有同种物品都收到光标上（工具各占一格，不参与）
+  gather() {
+    const g = this.game;
+    const cur = g.cursor;
+    if (!cur || isTool(cur.id)) return 0;
+    const max = maxStack(cur.id);
+    const spots = [];
+    for (let i = 0; i < INV_SIZE; i++) spots.push(['inv', i]);
+    const grid = this.craftGrid();
+    for (let i = 0; i < grid.length; i++) spots.push(['craft', i]);
+    let moved = 0;
+    for (const [area, i] of spots) {
+      if (cur.count >= max) break;
+      const s = this.getStack(area, i);
+      if (!s || s.id !== cur.id) continue;
+      const take = Math.min(max - cur.count, s.count);
+      if (take <= 0) continue;
+      s.count -= take;
+      cur.count += take;
+      moved += take;
+      if (s.count <= 0) this.setStack(area, i, null);
+    }
+    return moved;
   }
 
   // shift 点击 = 快速转移：背包↔热键栏、合成格/熔炉/防具 → 背包。

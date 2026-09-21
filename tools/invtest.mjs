@@ -462,6 +462,217 @@ check('滚轮：触控板轻扫（滚动量 144 分 12 次）= 切 1 格，不�
 check('滚轮：连滚三格 = 切 3 格', wheel.three === 3, JSON.stringify(wheel));
 check('滚轮：单次超大 delta 最多跳 4 格', wheel.huge === 4, JSON.stringify(wheel));
 
+// ---- 14 拖拽分发：左键把光标上那组按划过的格数均分 ----
+const dragLeft = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const planks = items.ITEM_BY_KEY['planks'].id;
+  const reset = () => {
+    if (ui.isOpen()) ui.close();
+    g.cursor = null; g.inventory.selected = 0;
+    for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+    for (let i=0;i<g.craft3.length;i++) g.craft3[i]=null;
+    for (let i=0;i<g.craft2.length;i++) g.craft2[i]=null;
+    ui.lastClick = null;
+    ui.open('inventory');
+  };
+  const el = (i) => [...document.querySelectorAll('#panel .slot')].find((e) => e.dataset.area==='inv' && e.dataset.index===String(i));
+  const down = (i, btn) => el(i).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, button: btn||0 }));
+  const move = (i) => el(i).dispatchEvent(new MouseEvent('mousemove', { bubbles:true }));
+  const up = (btn) => window.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, button: btn||0 }));
+  const counts = (list) => list.map((i) => g.inventory.slots[i] ? g.inventory.slots[i].count : 0);
+  const cursor = () => g.cursor ? g.cursor.count : 0;
+
+  // 松手之前不落子（拖拽要等划过哪些格都确定了才知道怎么分）
+  reset();
+  g.cursor = inv.makeStack(planks, 9, 0);
+  down(20);
+  const beforeUp = counts([20,21,22]);
+  move(21); move(22);
+  up();
+  const spread9 = counts([20,21,22]);
+  const left9 = cursor();
+
+  // 除不尽时余数留在光标上
+  reset();
+  g.cursor = inv.makeStack(planks, 10, 0);
+  down(20); move(21); move(22); up();
+  const spread10 = counts([20,21,22]);
+  const left10 = cursor();
+
+  // 从一格拿起再拖到别的格：只分给目标格，不把东西放回原处
+  reset();
+  g.inventory.slots[20] = inv.makeStack(planks, 9, 0);
+  down(20);
+  const picked = cursor();
+  move(21); up();
+  const afterPickDrag = counts([20,21]);
+
+  // 光标提着 16 个，按在第 20 格再划过 21/22/23：起点也算一格，4 格各 4 个
+  reset();
+  g.cursor = inv.makeStack(planks, 16, 0);
+  down(20); move(21); move(22); move(23); up();
+  const fourSlots = counts([20,21,22,23]);
+  const left16 = cursor();
+
+  // 不拖、直接单击：还是原来的一次放完
+  reset();
+  g.cursor = inv.makeStack(planks, 7, 0);
+  down(20); up();
+  const plainClick = counts([20]);
+  const plainLeft = cursor();
+
+  reset();
+  ui.close();
+  return { beforeUp, spread9, left9, spread10, left10, picked, afterPickDrag, fourSlots, left16, plainClick, plainLeft };
+})()`);
+check('左键拖拽：松手之前不落子', dragLeft.beforeUp.join(',') === '0,0,0', JSON.stringify(dragLeft));
+check('左键拖拽：9 个分给 3 格 = 3/3/3', dragLeft.spread9.join(',') === '3,3,3' && dragLeft.left9 === 0, JSON.stringify(dragLeft));
+check('左键拖拽：10 个分给 3 格 = 3/3/3，余 1 留在光标', dragLeft.spread10.join(',') === '3,3,3' && dragLeft.left10 === 1, JSON.stringify(dragLeft));
+check('左键拖拽：拿起后拖走不会放回原格', dragLeft.picked === 9 && dragLeft.afterPickDrag.join(',') === '0,9', JSON.stringify(dragLeft));
+check('左键拖拽：光标提着物品时起点也算一格（16 个划 4 格 = 4/4/4/4）', dragLeft.fourSlots.join(',') === '4,4,4,4' && dragLeft.left16 === 0, JSON.stringify(dragLeft));
+check('左键单击回归：一次放完', dragLeft.plainClick[0] === 7 && dragLeft.plainLeft === 0, JSON.stringify(dragLeft));
+
+// ---- 15 拖拽分发：右键每格放 1 个 ----
+const dragRight = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const planks = items.ITEM_BY_KEY['planks'].id;
+  const reset = () => {
+    if (ui.isOpen()) ui.close();
+    g.cursor = null; g.inventory.selected = 0;
+    for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+    for (let i=0;i<g.craft3.length;i++) g.craft3[i]=null;
+    for (let i=0;i<g.craft2.length;i++) g.craft2[i]=null;
+    ui.lastClick = null;
+    ui.open('inventory');
+  };
+  const el = (i) => [...document.querySelectorAll('#panel .slot')].find((e) => e.dataset.area==='inv' && e.dataset.index===String(i));
+  const down = (i, btn) => el(i).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, button: btn }));
+  const move = (i) => el(i).dispatchEvent(new MouseEvent('mousemove', { bubbles:true }));
+  const up = (btn) => window.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, button: btn }));
+  const counts = (list) => list.map((i) => g.inventory.slots[i] ? g.inventory.slots[i].count : 0);
+  const cursor = () => g.cursor ? g.cursor.count : 0;
+
+  reset();
+  g.inventory.slots[20] = inv.makeStack(planks, 9, 0);
+  down(20, 2);
+  const half = cursor();
+  const rest = g.inventory.slots[20] ? g.inventory.slots[20].count : 0;
+  move(21); move(22); up(2);
+  const spread = counts([21,22]);
+  const left = cursor();
+
+  // 右键不拖：只放 1 个
+  reset();
+  g.cursor = inv.makeStack(planks, 7, 0);
+  down(20, 2); up(2);
+  const oneEach = counts([20]);
+  const oneLeft = cursor();
+
+  reset();
+  ui.close();
+  return { half, rest, spread, left, oneEach, oneLeft };
+})()`);
+check('右键拖拽：先拿一半（9 → 5 个，原格留 4）', dragRight.half === 5 && dragRight.rest === 4, JSON.stringify(dragRight));
+check('右键拖拽：划过的每格放 1 个', dragRight.spread.join(',') === '1,1' && dragRight.left === 3, JSON.stringify(dragRight));
+check('右键单击回归：只放 1 个', dragRight.oneEach[0] === 1 && dragRight.oneLeft === 6, JSON.stringify(dragRight));
+
+// ---- 16 双击收拢同种物品 ----
+const dblGather = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  const planks = items.ITEM_BY_KEY['planks'].id;
+  const pick = items.ITEM_BY_KEY['iron_pickaxe'].id;
+  const reset = (mode) => {
+    if (ui.isOpen()) ui.close();
+    g.cursor = null; g.inventory.selected = 0;
+    for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+    for (let i=0;i<g.craft3.length;i++) g.craft3[i]=null;
+    for (let i=0;i<g.craft2.length;i++) g.craft2[i]=null;
+    ui.lastClick = null;
+    ui.open(mode || 'inventory');
+  };
+  const el = (i) => [...document.querySelectorAll('#panel .slot')].find((e) => e.dataset.area==='inv' && e.dataset.index===String(i));
+  const click = (i) => {
+    el(i).dispatchEvent(new MouseEvent('mousedown', { bubbles:true, button: 0 }));
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, button: 0 }));
+  };
+  const counts = (list) => list.map((i) => g.inventory.slots[i] ? g.inventory.slots[i].count : 0);
+
+  // 双击第 10 格：第一下拿起 3 个，第二下把 14/20 格的同种物品也收过来
+  reset();
+  g.inventory.slots[10] = inv.makeStack(planks, 3, 0);
+  g.inventory.slots[14] = inv.makeStack(planks, 5, 0);
+  g.inventory.slots[20] = inv.makeStack(planks, 2, 0);
+  click(10);
+  const afterFirst = g.cursor ? g.cursor.count : 0;
+  click(10);
+  const gathered = g.cursor ? g.cursor.count : 0;
+  const emptied = counts([10,14,20]);
+
+  // 收拢也管合成格里的材料（只有工作台界面才有 3x3 格）
+  reset('crafting');
+  g.inventory.slots[10] = inv.makeStack(planks, 2, 0);
+  g.craft3[4] = inv.makeStack(planks, 3, 0);
+  click(10); click(10);
+  const withCraft = g.cursor ? g.cursor.count : 0;
+  const craftLeft = g.craft3[4] ? g.craft3[4].count : 0;
+
+  // 工具不参与收拢（各占一格，叠不起来）——双击等于原地不动，耐久也不能丢
+  reset();
+  g.inventory.slots[10] = inv.makeStack(pick, 1, 20);
+  g.inventory.slots[14] = inv.makeStack(pick, 1, 30);
+  click(10); click(10);
+  const toolCursor = g.cursor ? g.cursor.count : 0;
+  const toolOrigin = g.inventory.slots[10] ? g.inventory.slots[10].count : 0;
+  const toolOriginDmg = g.inventory.slots[10] ? g.inventory.slots[10].dmg : -1;
+  const toolOther = g.inventory.slots[14] ? g.inventory.slots[14].count : 0;
+
+  reset();
+  ui.close();
+  return { afterFirst, gathered, emptied, withCraft, craftLeft, toolCursor, toolOrigin, toolOriginDmg, toolOther };
+})()`);
+check('双击收拢：第一下只拿起这一格（3 个）', dblGather.afterFirst === 3, JSON.stringify(dblGather));
+check('双击收拢：全背包同种物品集中到光标（3+5+2=10）', dblGather.gathered === 10 && dblGather.emptied.join(',') === '0,0,0', JSON.stringify(dblGather));
+check('双击收拢：合成格里的材料也一起收', dblGather.withCraft === 5 && dblGather.craftLeft === 0, JSON.stringify(dblGather));
+check('双击收拢：工具不参与（原地不动、耐久不丢）', dblGather.toolCursor === 0 && dblGather.toolOrigin === 1 && dblGather.toolOriginDmg === 20 && dblGather.toolOther === 1, JSON.stringify(dblGather));
+
+// ---- 17 切换手持物品时显示物品名 ----
+const heldName = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  if (g.ui.isOpen()) g.ui.close();
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  const pick = items.ITEM_BY_KEY['iron_pickaxe'];
+  const coal = items.ITEM_BY_KEY['coal'];
+  g.inventory.slots[2] = inv.makeStack(pick.id, 1, 0);
+  g.inventory.slots[4] = inv.makeStack(coal.id, 12, 0);
+  g.inventory.selected = 0;
+  g.ui.showHint('');
+  const el = document.getElementById('item-hint');
+  const read = () => ({ text: el.textContent, opacity: el.style.opacity });
+  window.dispatchEvent(new KeyboardEvent('keydown', { code:'Digit3', bubbles:true }));
+  const at3 = read();
+  window.dispatchEvent(new KeyboardEvent('keydown', { code:'Digit5', bubbles:true }));
+  const at5 = read();
+  window.dispatchEvent(new KeyboardEvent('keydown', { code:'Digit7', bubbles:true }));
+  const at7 = read();
+  g.inventory.selected = 0;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  return { at3, at5, at7, pickLabel: pick.label, coalLabel: coal.label, selected: g.inventory.selected };
+})()`);
+check('切换手持物品：显示物品名', heldName.at3.text === heldName.pickLabel && heldName.at3.opacity === '1', JSON.stringify(heldName));
+check('切换手持物品：可叠物品带数量', heldName.at5.text === heldName.coalLabel + ' \u00d712', JSON.stringify(heldName));
+check('切换手持物品：切到空格不报名字', heldName.at7.text === heldName.coalLabel + ' \u00d712', JSON.stringify(heldName));
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {

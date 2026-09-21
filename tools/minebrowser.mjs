@@ -232,6 +232,32 @@ const perf = await ev(`(function(){ const g = window.game; return { fps: g.fps }
 check('跑 3 秒后帧率 > 20', perf.fps > 20, 'fps=' + perf.fps);
 check('运行期无 JS 报错', cdp.errors.length === 0, cdp.errors.slice(0, 3).join(' | '));
 
+// ---- G 按住右键连续放置：只对方块生效，松手立刻停 ----
+const holdRight = await ev(`(async function(){
+  const g = window.game;
+  const items = await import('/js/items.js');
+  const inv = g.inventory;
+  inv.slots[0] = { id: items.ITEM_BY_KEY['cobblestone'].id, count: 64, dmg: 0 };
+  inv.selected = 0;
+  g.locked = true;
+  let calls = 0;
+  const orig = g.useItem;
+  g.useItem = function(){ calls++; };
+  g.canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles:true, button: 2 }));
+  await new Promise((r) => setTimeout(r, 800));
+  const during = calls;
+  window.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, button: 2 }));
+  await new Promise((r) => setTimeout(r, 500));
+  const afterRelease = calls;
+  g.useItem = orig;
+  inv.slots[0] = null;
+  inv.selected = 0;
+  g.locked = document.pointerLockElement === g.canvas;
+  return { during, afterRelease };
+})()`);
+check('按住右键会连续放置（800ms 内 >= 3 次）', holdRight.during >= 3, JSON.stringify(holdRight));
+check('松开右键立刻停手', holdRight.afterRelease === holdRight.during, JSON.stringify(holdRight));
+
 console.log('\n================ 挖掘/掉落验证 ================');
 let pass = 0;
 for (const r of results) {

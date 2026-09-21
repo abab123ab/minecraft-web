@@ -29,6 +29,8 @@ const LOG_CHAIN_LIMIT = 96;
 // 滚轮一格 = 100 像素；一次事件最多跳 4 格，避免高分辨率滚轮猛甩时瞬间绕圈
 const WHEEL_NOTCH = 100;
 const MAX_WHEEL_STEPS = 4;
+// 按住右键连续放置的间隔，对齐原版（约 0.2 秒一格）
+const USE_REPEAT = 0.2;
 
 class Game {
   get isDay() { return this.sky.isDay; }
@@ -67,6 +69,8 @@ class Game {
     this.particles = new Particles(this.scene, this.world.atlasTexture);
     this.sky = new Sky(this.scene, this.camera, this.world);
     this.attackCd = 0;
+    this.useHeld = false;
+    this.useTimer = 0;
     this.deathShown = false;
     this.input = {
       forward: false, back: false, left: false, right: false,
@@ -239,6 +243,8 @@ class Game {
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === this.canvas;
       this.locked = locked;
+      // 丢了指针锁就停手：否则按住右键去开工作台，松手前会一直往世界里放方块
+      if (!locked) { this.useHeld = false; this.mining = false; }
       if (!locked && this.started && !this.ui.isOpen()) overlay.classList.remove('hidden');
     });
 
@@ -250,10 +256,11 @@ class Game {
     this.canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
       if (e.button === 0) { this.mining = true; this.mineState = null; }
-      if (e.button === 2) this.useItem();
+      if (e.button === 2) { this.useHeld = true; this.useTimer = USE_REPEAT; this.useItem(); }
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) { this.mining = false; this.mineState = null; }
+      if (e.button === 2) this.useHeld = false;
     });
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -269,6 +276,7 @@ class Game {
       this.wheelAcc -= steps * WHEEL_NOTCH;
       this.inventory.selected = (this.inventory.selected + steps + HOTBAR_SIZE * 2) % HOTBAR_SIZE;
       this.ui.render();
+      this.showHeldName();
     });
 
     window.addEventListener('keydown', (e) => this.onKey(e, true));
@@ -327,6 +335,7 @@ class Game {
       if (n >= 1 && n <= 9) {
         this.inventory.selected = n - 1;
         this.ui.render();
+        this.showHeldName();
       }
     }
   }
@@ -419,6 +428,26 @@ class Game {
   hitTest() {
     const eye = this.player.eyePos();
     return this.world.raycast(eye, this.lookDir(), REACH);
+  }
+
+  // 按住右键连续放置。只对方块生效 —— 吃食物、开工作台/熔炉这些按一次就够，
+  // 跟着一起连点会在一秒内把一整组食物吃光、或者反复重开界面。
+  updateUseHold(dt) {
+    if (!this.useHeld || !this.locked) return;
+    const held = this.inventory.held();
+    if (!held || !ITEMS[held.id].blockId) return;
+    this.useTimer -= dt;
+    if (this.useTimer > 0) return;
+    this.useTimer = USE_REPEAT;
+    this.useItem();
+  }
+
+  // 切换手持物品时在准星下方报一下名字（原版行为）。空手不报，也不清掉上一条提示。
+  showHeldName() {
+    const s = this.inventory.held();
+    if (!s) return;
+    const it = ITEMS[s.id];
+    this.ui.showHint(it.label + (s.count > 1 ? ' ×' + s.count : ''));
   }
 
   useItem() {
@@ -777,6 +806,7 @@ class Game {
       const attacked = canAct ? this.updateAttack(dt) : false;
       if (attacked) this.hideMineOverlay();
       else this.updateMining(canAct ? dt : 0);
+      this.updateUseHold(canAct ? dt : 0);
       this.collectDrops(dt);
       this.updateFurnaces(dt);
       this.particles.update(dt);
