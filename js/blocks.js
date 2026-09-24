@@ -75,10 +75,13 @@ def('torch', {
   solid: false, opaque: false, transparent: true, drop: 'torch', light: 14, flat: true, sound: 'wood'
 });
 
+// bed.png 是「床的侧面图」：白枕头 + 红被子 + 木头床架。它的顶部三行是镂空的
+// （39/256 个像素全透明，RGB 是 0,0,0）—— 那是床垫上方的空间。
+// 当不透明方块画的话，alpha 被忽略，这三行就直接变成一条黑带糊在床顶上。
 def('bed', {
   label: '床', tiles: ['bed', 'bed', 'bed'],
   hardness: 0.4, tool: null, tier: 0,
-  solid: true, opaque: true, transparent: false, drop: 'bed', light: 0, sound: 'wood'
+  solid: true, opaque: true, transparent: false, cutout: true, drop: 'bed', light: 0, sound: 'wood'
 });
 
 export function isSolid(id) { return BLOCKS[id].solid; }
