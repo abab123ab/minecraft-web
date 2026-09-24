@@ -978,6 +978,96 @@ check('界面关着 1-9：只换手持不动物品（回归）', numSwap.closed.
 check('界面开着 1-9：产物格不给换', numSwap.onResult === false, JSON.stringify(numSwap));
 check('界面开着 1-9：防具格也能换', numSwap.onArmor === true && numSwap.armorMoved === numSwap.coal, JSON.stringify(numSwap));
 
+// ---- 24 床的配方：3 宽 2 高（羊毛一排 + 木板一排）----
+// 原配方写成 6 行 1 列，3×3 网格根本放不下，35 条配方里就这一条永远合不出东西。
+const bedRecipe = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const craft = await import('/js/crafting.js');
+  const ui = g.ui;
+  if (ui.isOpen()) ui.close();
+  g.cursor = null;
+  for (let i=0;i<9;i++) g.craft3[i] = null;
+  ui.open('crafting');
+  const W = items.ITEM_BY_KEY['wool'].id, P = items.ITEM_BY_KEY['planks'].id;
+  const wool = [0,1,2], plank = [3,4,5];
+  for (const i of wool) g.craft3[i] = inv.makeStack(W,1,0);
+  for (const i of plank) g.craft3[i] = inv.makeStack(P,1,0);
+  const res = ui.resultStack();
+  const rec = craft.RECIPES.find(r => r.resultKey === 'bed');
+  // 少一块羊毛就不该出结果
+  g.craft3[2] = null;
+  const short = ui.resultStack();
+  for (let i=0;i<9;i++) g.craft3[i] = null;
+  ui.close();
+  g.cursor = null;
+  return { w: rec.w, h: rec.h, got: res ? items.ITEMS[res.id].key : null, short: short ? items.ITEMS[short.id].key : null };
+})()`);
+check('床配方是 3 宽 2 高（放得进 3×3）', bedRecipe.w === 3 && bedRecipe.h === 2, JSON.stringify(bedRecipe));
+check('床能合出来（羊毛一排 + 木板一排）', bedRecipe.got === 'bed', JSON.stringify(bedRecipe));
+check('床：材料少一块就不出结果（没放宽匹配）', bedRecipe.short === null, JSON.stringify(bedRecipe));
+
+// ---- 25 耐久条只在磨损后才画 ----
+// 新做出来/新捡到的工具 dmg = 0，原来也画一条满绿，看着像已经用过了。
+const durBar = await ev(`(async function(){
+  const g = window.game;
+  const inv = await import('/js/inventory.js');
+  const items = await import('/js/items.js');
+  const ui = g.ui;
+  if (ui.isOpen()) ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  g.inventory.armor = [null,null,null,null];
+  const pick = items.ITEM_BY_KEY['iron_pickaxe'].id;
+  g.inventory.slots[9] = inv.makeStack(pick, 1, 0);
+  g.inventory.slots[10] = inv.makeStack(pick, 1, 130);
+  ui.open('inventory');
+  // 耐久条画在格子 canvas 的 y=28..30 那一行（x 从 2 到 30）
+  const barRow = (area, index) => {
+    const el = [...document.querySelectorAll('#panel .slot')]
+      .find(e => e.dataset.area===area && e.dataset.index===String(index));
+    const d = el.firstChild.getContext('2d').getImageData(0,0,32,32).data;
+    const out = [];
+    for (let x=2;x<30;x+=6){ const i=(29*32+x)*4; out.push([d[i],d[i+1],d[i+2],d[i+3]]); }
+    return out;
+  };
+  const fresh = barRow('inv', 9);
+  const worn = barRow('inv', 10);
+  const deadDom = !!document.querySelector('#panel .slot .dur');
+  ui.close();
+  g.cursor = null;
+  for (let i=0;i<inv.INV_SIZE;i++) g.inventory.slots[i]=null;
+  return { fresh, worn, deadDom };
+})()`);
+check('新工具（dmg=0）不画耐久条', durBar.fresh.every(p => p[3] === 0), JSON.stringify(durBar.fresh));
+check('磨损工具（dmg>0）照常画耐久条', durBar.worn.some(p => p[3] > 0 && p[0] > 150), JSON.stringify(durBar.worn));
+check('.dur 空元素不再塞进每个格子', durBar.deadDom === false, String(durBar.deadDom));
+
+// ---- 26 图标缓存必须按尺寸分开 ----
+// 原来缓存键只有物品 id：背包先画会占住 32px，手持物品再要 72px 拿到的还是 32px，
+// 放大 2.25 倍就发虚。手持和背包要的是两张不同的图，不能互相顶掉。
+const iconCache = await ev(`(async function(){
+  const g = window.game;
+  const items = await import('/js/items.js');
+  const em = items.ITEM_BY_KEY['emerald'];
+  const a = items.itemIconCanvas(g.atlasCanvas, em, 32);
+  const b = items.itemIconCanvas(g.atlasCanvas, em, 72);
+  const a2 = items.itemIconCanvas(g.atlasCanvas, em, 32);
+  return { a32: [a.width,a.height], b72: [b.width,b.height], sameSlot: a === a2, distinct: a !== b };
+})()`);
+check('同一物品：要 32 给 32、要 72 给 72', iconCache.a32[0] === 32 && iconCache.b72[0] === 72, JSON.stringify(iconCache));
+check('同一尺寸的图标仍然复用缓存', iconCache.sameSlot === true);
+check('32 和 72 是两张不同的图', iconCache.distinct === true);
+
+// ---- 27 熔炉顶面贴图 ----
+const furnaceTop = await ev(`(async function(){
+  const B = (await import('/js/blocks.js')).BLOCK_BY_KEY;
+  const T = (await import('/js/textures.js')).TILE_INDEX;
+  return { tiles: B.furnace.tiles, hasTop: T.furnace_top !== undefined };
+})()`);
+check('熔炉顶面用 furnace_top（原来误用 furnace_side）', furnaceTop.tiles[0] === 'furnace_top' && furnaceTop.hasTop === true, JSON.stringify(furnaceTop));
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {

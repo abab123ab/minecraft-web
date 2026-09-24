@@ -49,7 +49,9 @@ function trimPattern(rows) {
 shapeless(['log'], 'planks', 4);
 shaped(['P', 'P'], { P: 'planks' }, 'stick', 4);
 shaped(['C', 'S'], { C: 'coal', S: 'stick' }, 'torch', 4);
-shaped(['W', 'W', 'W', 'P', 'P', 'P'], { W: 'wool', P: 'planks' }, 'bed', 1);
+// 床是 3 宽 2 高（羊毛一排 + 木板一排）。原来写成 6 行 1 列了 ——
+// 那形状 3×3 网格根本放不下，35 条配方里就这一条永远合不出东西来。
+shaped(['WWW', 'PPP'], { W: 'wool', P: 'planks' }, 'bed', 1);
 shaped(['PP', 'PP'], { P: 'planks' }, 'crafting_table', 1);
 shaped(['SS', 'SS'], { S: 'sand' }, 'sandstone', 1);
 shaped(['CCC', 'C C', 'CCC'], { C: 'cobblestone' }, 'furnace', 1);

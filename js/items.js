@@ -135,9 +135,12 @@ export function itemTileIndex(it) {
 
 const iconCache = new Map();
 
+// 缓存键必须带上尺寸：手持物品要 72px、背包格子要 32px，同一个物品两张都要。
+// 原来只按 it.id 缓存，谁先要谁定尺寸 —— 背包先画，手持就拿 32px 的图标放大 2.25 倍，边缘发虚。
 export function itemIconCanvas(atlasCanvas, it, size) {
   const s = size || 32;
-  let cached = iconCache.get(it.id);
+  const ck = it.id + '@' + s;
+  let cached = iconCache.get(ck);
   if (cached) return cached;
   const c = document.createElement('canvas');
   c.width = s; c.height = s;
@@ -161,7 +164,7 @@ export function itemIconCanvas(atlasCanvas, it, size) {
       ctx.drawImage(atlasCanvas, col * 16, row * 16, 16, 16, 0, 0, s, s);
     }
   }
-  iconCache.set(it.id, c);
+  iconCache.set(ck, c);
   return c;
 }
 

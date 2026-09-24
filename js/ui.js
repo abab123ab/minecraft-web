@@ -69,9 +69,6 @@ export class UI {
     const cnt = document.createElement('span');
     cnt.className = 'cnt';
     el.appendChild(cnt);
-    const dur = document.createElement('i');
-    dur.className = 'dur';
-    el.appendChild(dur);
     return el;
   }
 
@@ -688,7 +685,9 @@ export class UI {
     const icon = itemIconCanvas(this.game.atlasCanvas, ITEMS[stack.id], 32);
     ctx.drawImage(icon, 0, 0, 32, 32);
     if (stack.count > 1) cntEl.textContent = String(stack.count);
-    if (isTool(stack.id)) {
+    // 耐久条只在真的磨损后才画。新做出来、新捡到的工具 dmg = 0，
+    // 画一条满绿出来会让人以为这工具已经用过了。
+    if (isTool(stack.id) && stack.dmg > 0) {
       const max = ITEMS[stack.id].tool.durability;
       const frac = Math.max(0, 1 - stack.dmg / max);
       ctx.fillStyle = '#2b2b2b';
