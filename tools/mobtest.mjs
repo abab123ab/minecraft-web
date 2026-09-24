@@ -321,57 +321,141 @@ const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
 fs.mkdirSync(path.join(process.cwd(), 'screenshots'), { recursive: true });
 fs.writeFileSync(path.join(process.cwd(), 'screenshots', 'mobtest.png'), Buffer.from(shot.result.data, 'base64'));
 
-// ---- K 生物渲染贴合 hitbox ----
-const sizes = await ev(`(function(){
+// ---- K 生物渲染贴合 hitbox + 朝向用自身 yaw ----
+//
+// 生物从「一张永远正对相机的贴纸」换成了「一堆长方体拼的 3D 模型」，
+// 所以量的是整个网格的世界包围盒，而不是某个 plane 的 geometry.parameters。
+const sizes = await ev(`(async function(){
+  const THREE = await import('/js/vendor/three.module.js');
   const g = window.game;
+  g.mobs.clear();
+  g.mobs.spawnTimer = 999;
+  const p = g.player.pos;
   const out = {};
-  for (const m of g.mobs.list) {
-    const g3 = m.mesh.geometry.parameters;
-    out[m.type] = { h: g3.height, w: g3.width, hitbox: { h: m.def.h, w: m.def.w } };
-  }
+  const types = ['pig', 'cow', 'chicken', 'sheep', 'zombie', 'skeleton', 'creeper'];
+  types.forEach((t, i) => {
+    // 一次性摆到高处远处，别让它们影响后面几个用例；量完就清掉
+    const m = g.mobs.spawn(t, p.x + 40, p.y + 40, p.z + 40 + i * 3);
+    const bb = new THREE.Box3().setFromObject(m.mesh);
+    let parts = 0, tris = 0;
+    m.mesh.traverse((o) => {
+      if (!o.isMesh) return;
+      parts++;
+      const idx = o.geometry.getIndex();
+      tris += idx ? idx.count / 3 : 0;
+    });
+    out[t] = {
+      h: +(bb.max.y - bb.min.y).toFixed(3),
+      w: +(bb.max.x - bb.min.x).toFixed(3),
+      d: +(bb.max.z - bb.min.z).toFixed(3),
+      // 相对生物自己的脚下，不是世界坐标 —— 生物是生成在 p.y+40 的
+      minY: +(bb.min.y - m.pos.y).toFixed(4),
+      hitbox: { h: m.def.h, w: m.def.w },
+      parts, tris
+    };
+  });
+  g.mobs.clear();
   return out;
 })()`);
 for (const t of Object.keys(sizes)) {
   const s = sizes[t];
   check(t + ' 渲染高 ≈ hitbox 高（误差<0.01）', Math.abs(s.h - s.hitbox.h) < 0.01, JSON.stringify(s));
+  check(t + ' 脚踩在自己脚下（相对 y=0）', Math.abs(s.minY) < 0.01, 'minY=' + s.minY);
+  check(t + ' 是多个长方体拼的（不是一张平面）', s.parts >= 6 && s.tris >= 70, JSON.stringify({ parts: s.parts, tris: s.tris }));
 }
 
+// 朝向必须是生物自己走的那个方向，不能再永远正对相机
+// （以前是一张纸片，只有正对相机才「看起来像」；现在的模型必须有自己的朝向）
+const facing = await ev(`(function(){
+  const g = window.game;
+  g.mobs.clear();
+  g.mobs.spawnTimer = 999;
+  const p = g.player.pos;
+  const pig = g.mobs.spawn('pig', p.x, p.y, p.z - 4);
+  pig.pauseTimer = 0;
+  pig.wanderTimer = 999;
+  pig.yaw = 0.5;
+  pig.vel.x = 0;
+  pig.vel.z = 0;
+  for (let i = 0; i < 3; i++) g.updateMobs(0.016);
+  const r = {
+    yaw: pig.yaw,
+    rotY: pig.mesh.rotation.y,
+    toCam: Math.atan2(g.camera.position.x - pig.pos.x, g.camera.position.z - pig.pos.z),
+    legsA: pig.mesh.userData.legs.length,
+    legsB: pig.mesh.userData.legsB.length
+  };
+  g.mobs.clear();
+  return r;
+})()`);
+check('朝向跟着自己的 yaw（不再永远正对相机）', Math.abs(facing.rotY - facing.yaw) < 1e-6,
+  JSON.stringify(facing));
+check('这一条不是空跑（yaw 和「对着相机」确实不同）', Math.abs(facing.yaw - facing.toCam) > 0.1,
+  JSON.stringify(facing));
+check('四足生物挂上了两组对角腿', facing.legsA === 2 && facing.legsB === 2,
+  facing.legsA + '/' + facing.legsB);
+
 // ---- L 走路动画：移动时上下浮动 ----
+//
+// 两条坑：
+// 1) think() 每帧按 yaw 重写 vel，塞 vel.x 没用，得把 yaw 摆成 sin≠0；
+// 2) 生物脚下那一列不一定是平的。生物是钉在 p.y 的，p.x+3 那列地面矮一格的话
+//    它就永远悬空、onGround 一直 false，gait 恒为 0。
+//    而「不走路」时 update() 会额外叠一个 ±0.03 的闲置呼吸，
+//    所以只看 bob>0.005 会拿呼吸当成走路 bob 通过。这里改成先探地形把猪放到实地面上。
 const walkAnim = await ev(`(function(){
   const g = window.game;
   g.mobs.clear();
+  g.mobs.spawnTimer = 999;
   const p = g.player.pos;
   const bx = Math.floor(p.x) + 3, bz = Math.floor(p.z);
   const by = Math.floor(p.y);
+  // 清一块空地，别让它撞墙
   for (let dx = -1; dx <= 1; dx++)
     for (let dz = -1; dz <= 1; dz++)
       for (let dy = 0; dy <= 5; dy++)
         g.world.setBlock(bx + dx, by + dy, bz + dz, 0);
-  const pig = g.mobs.spawn('pig', bx + 0.5, by, bz + 0.5);
-  pig.pauseTimer = 0;
-  pig.wanderTimer = 999;
-  pig.yaw = 0;
-  pig.vel.x = 1.5;
-  pig.vel.z = 0;
-  for (let i = 0; i < 4; i++) g.updateMobs(0.016);
-  pig.onGround = true;
-  let maxBob = 0;
-  let maxAmp = 0;
+  // 探这一列的地面：从上往下找第一块实心，站它上面
+  let gy = by + 6;
+  while (gy > 0 && g.world.getBlock(bx, gy, bz) === 0) gy--;
+  const stand = gy + 1;
+  const pig = g.mobs.spawn('pig', bx + 0.5, stand, bz + 0.5);
+  let maxBob = 0, maxAmp = 0;
   for (let i = 0; i < 120; i++) {
-    g.updateMobs(0.016);
+    pig.pos.x = bx + 0.5;
+    pig.pos.z = bz + 0.5;
+    pig.pos.y = stand;
     pig.pauseTimer = 0;
     pig.wanderTimer = 999;
-    pig.vel.x = 1.5;
-    pig.vel.z = 0;
-    pig.onGround = true;
+    pig.panic = 0;
+    pig.yaw = Math.PI / 2;   // sin=1，think() 才会给它速度
+    g.updateMobs(0.016);
     maxBob = Math.max(maxBob, Math.abs(pig.mesh.position.y - pig.pos.y));
     maxAmp = Math.max(maxAmp, pig.walkAmp);
   }
+  // 对照：站着不动时 walkAmp 必须掉下去，bob 只剩闲置呼吸那点
+  // 先跑 60 帧让它衰减干净，再看剩下的摆动
+  for (let i = 0; i < 60; i++) {
+    pig.pos.y = stand;
+    pig.pauseTimer = 999;
+    g.updateMobs(0.016);
+  }
+  let idleBob = 0;
+  for (let i = 0; i < 60; i++) {
+    pig.pos.y = stand;
+    pig.pauseTimer = 999;
+    g.updateMobs(0.016);
+    idleBob = Math.max(idleBob, Math.abs(pig.mesh.position.y - pig.pos.y));
+  }
+  const idleAmp = pig.walkAmp;
   g.mobs.clear();
-  return { maxBob, amp: pig.walkAmp, maxAmp };
+  return { maxBob, maxAmp, idleBob, idleAmp, onGroundLast: pig.onGround };
 })()`);
-check('走动时垂直 bob > 0.005', walkAnim.maxBob > 0.005, 'maxBob=' + walkAnim.maxBob);
-check('走完时 walkAmp > 0.01', walkAnim.amp > 0.01 || walkAnim.maxAmp > 0.01, JSON.stringify(walkAnim));
+check('走动时垂直 bob > 0.02', walkAnim.maxBob > 0.02, JSON.stringify(walkAnim));
+check('走动时 walkAmp 抬起来（> 0.02）', walkAnim.maxAmp > 0.02, JSON.stringify(walkAnim));
+// 这一条对着上面的：不动的时候 walkAmp 要落回 0，bob 只剩呼吸的 ±0.03
+check('站着不动时 walkAmp 落回 0（bob 确实来自走路）', walkAnim.idleAmp < 0.005,
+  JSON.stringify(walkAnim));
 
 // ---- M 卡墙转向 ----
 const stuck = await ev(`(function(){
@@ -418,7 +502,7 @@ const deathAnim = await ev(`(function(){
   const frames = [];
   for (let i = 0; i < 80; i++) {
     g.updateMobs(0.016);
-    frames.push({ rot: pig.mesh.rotation.z, op: pig.mesh.material.opacity });
+    frames.push({ rot: pig.mesh.rotation.z, op: pig.mesh.userData.mats[0].opacity });
   }
   g.mobs.clear();
   return { rotMin: Math.min(...frames.map(f => f.rot)), opMin: Math.min(...frames.map(f => f.op)) };
@@ -433,9 +517,10 @@ const creeperAnim = await ev(`(function(){
   const p = g.player.pos;
   const c = g.mobs.spawn('creeper', p.x + 2, p.y, p.z);
   c.fuse = 0.4;
-  const before = { sx: c.mesh.scale.x, r: c.mesh.material.color.r, g: c.mesh.material.color.g, b: c.mesh.material.color.b };
+  const snap = () => { const m = c.mesh.userData.mats[0].color; return { sx: c.mesh.scale.x, r: m.r, g: m.g, b: m.b }; };
+  const before = snap();
   for (let i = 0; i < 6; i++) { g.updateMobs(0.03); if (!g.mobs.list.includes(c)) break; }
-  const during = { sx: c.mesh.scale.x, r: c.mesh.material.color.r, g: c.mesh.material.color.g, b: c.mesh.material.color.b };
+  const during = snap();
   g.mobs.clear();
   // 闪白 = 三个通道一起抬高。以前这里只压绿蓝，量出来是「g 下降」，
   // 于是苦力怕鼓胀时整只变暗红，而这条断言还把它当成正确的锁住了。
@@ -447,6 +532,85 @@ const creeperAnim = await ev(`(function(){
 })()`);
 check('苦力怕引爆过程 mesh 放大', creeperAnim.swelled, JSON.stringify(creeperAnim));
 check('苦力怕引爆过程闪白（三通道一起抬高）', creeperAnim.flashed, JSON.stringify(creeperAnim));
+
+// ---- P 挨打闪红：红通道不动，绿蓝压下去 ----
+//
+// 以前三个通道乘的是同一个系数，量出来整只只是发灰、并没变红。
+const hurtTint = await ev(`(function(){
+  const g = window.game;
+  g.mobs.clear();
+  g.mobs.spawnTimer = 999;
+  const p = g.player.pos;
+  const pig = g.mobs.spawn('pig', p.x + 3, p.y, p.z);
+  const snap = () => { const m = pig.mesh.userData.mats[0].color; return { r: +m.r.toFixed(4), g: +m.g.toFixed(4), b: +m.b.toFixed(4) }; };
+  for (let i = 0; i < 2; i++) g.updateMobs(0.016);
+  const calm = snap();
+  pig.hurtFlash = 0.4;
+  g.updateMobs(0.016);
+  const hit = snap();
+  g.mobs.clear();
+  return { calm, hit };
+})()`);
+check('挨打时红通道不动、绿蓝压下去（才是「闪红」不是「发灰」）',
+  hurtTint.hit.r >= hurtTint.calm.r - 1e-6 &&
+  hurtTint.hit.g < hurtTint.calm.g - 0.1 &&
+  hurtTint.hit.b < hurtTint.calm.b - 0.1,
+  JSON.stringify(hurtTint));
+
+// ---- Q 走路时腿真的在前后摆 ----
+//
+// 只量 mesh.position.y 的 bob 是不够的：那是整只上下晃，
+// 摆腿有没有落到每条腿上、是不是绕对了轴，得看腿块自己的 rotation.x。
+//
+// 注意两件事：
+// 1) think() 每一帧都会按 yaw 重写 vel（m.vel.x = sin(yaw) * speed * 0.55），
+//    在外面直接塞 vel.x 是没用的 —— yaw=0 就得到 sin(0)=0，摆幅量出来是 0，
+//    所以把 yaw 固定成正朝 +x（sin=1），让它自己走出速度来。
+// 2) 还得先探脚下那一列的地面再把它放上去，否则它一直悬空、onGround=false，
+//    gait 恒为 0，照样摆不起来。
+const legSwing = await ev(`(function(){
+  const g = window.game;
+  g.mobs.clear();
+  g.mobs.spawnTimer = 999;
+  const p = g.player.pos;
+  const px = Math.floor(p.x) + 5, pz = Math.floor(p.z);
+  let gy = Math.floor(p.y) + 6;
+  while (gy > 0 && g.world.getBlock(px, gy, pz) === 0) gy--;
+  const stand = gy + 1;
+  const pig = g.mobs.spawn('pig', px + 0.5, stand, pz + 0.5);
+  let maxA = 0, maxB = 0, crossZ = 0, antiPhase = 0;
+  for (let i = 0; i < 120; i++) {
+    // 钉住位置，让它一直保持「在走」的状态，别飘远、别撞墙
+    pig.pos.x = px + 0.5;
+    pig.pos.z = pz + 0.5;
+    pig.pos.y = stand;
+    pig.pauseTimer = 0;
+    pig.wanderTimer = 999;
+    pig.panic = 0;
+    pig.yaw = Math.PI / 2;
+    g.updateMobs(0.016);
+    const a = pig.mesh.userData.legs[0].rotation.x;
+    const b = pig.mesh.userData.legsB[0].rotation.x;
+    for (const pg of pig.mesh.userData.legs) {
+      maxA = Math.max(maxA, Math.abs(pg.rotation.x));
+      // 绕 z 轴转就是左右撇腿，那是不对的
+      crossZ = Math.max(crossZ, Math.abs(pg.rotation.z));
+    }
+    for (const pg of pig.mesh.userData.legsB) maxB = Math.max(maxB, Math.abs(pg.rotation.x));
+    // 两组腿要一直反相：加起来应该恒为 0。整段取最大值才有意义，
+    // 只看最后一帧的话两只都是 0 也会「通过」。
+    antiPhase = Math.max(antiPhase, Math.abs(a + b));
+  }
+  g.mobs.clear();
+  return {
+    maxA: +maxA.toFixed(3), maxB: +maxB.toFixed(3), crossZ, antiPhase: +antiPhase.toFixed(6),
+    onGround: pig.onGround, stand: stand
+  };
+})()`);
+check('走路时腿绕 x 轴前后摆（摆幅 ' + legSwing.maxA + '）', legSwing.maxA > 0.25 && legSwing.maxB > 0.25,
+  JSON.stringify(legSwing));
+check('对角线两组腿全程反相（同一时刻一前一后）', legSwing.antiPhase < 1e-6, JSON.stringify(legSwing));
+check('腿没有左右撇（rotation.z 一直是 0）', legSwing.crossZ < 1e-6, String(legSwing.crossZ));
 
 console.log('\n================ 生物系统验证 ================');
 let pass = 0;
