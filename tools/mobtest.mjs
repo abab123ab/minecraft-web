@@ -433,14 +433,20 @@ const creeperAnim = await ev(`(function(){
   const p = g.player.pos;
   const c = g.mobs.spawn('creeper', p.x + 2, p.y, p.z);
   c.fuse = 0.4;
-  const before = { sx: c.mesh.scale.x, g: c.mesh.material.color.g };
+  const before = { sx: c.mesh.scale.x, r: c.mesh.material.color.r, g: c.mesh.material.color.g, b: c.mesh.material.color.b };
   for (let i = 0; i < 6; i++) { g.updateMobs(0.03); if (!g.mobs.list.includes(c)) break; }
-  const during = { sx: c.mesh.scale.x, g: c.mesh.material.color.g };
+  const during = { sx: c.mesh.scale.x, r: c.mesh.material.color.r, g: c.mesh.material.color.g, b: c.mesh.material.color.b };
   g.mobs.clear();
-  return { before, during, swelled: during.sx > before.sx + 0.05, flashed: during.g < before.g - 0.2 };
+  // 闪白 = 三个通道一起抬高。以前这里只压绿蓝，量出来是「g 下降」，
+  // 于是苦力怕鼓胀时整只变暗红，而这条断言还把它当成正确的锁住了。
+  return {
+    before, during,
+    swelled: during.sx > before.sx + 0.05,
+    flashed: during.r > before.r + 0.2 && during.g > before.g + 0.2 && during.b > before.b + 0.2
+  };
 })()`);
 check('苦力怕引爆过程 mesh 放大', creeperAnim.swelled, JSON.stringify(creeperAnim));
-check('苦力怕引爆过程颜色偏白（g 下降）', creeperAnim.flashed, JSON.stringify(creeperAnim));
+check('苦力怕引爆过程闪白（三通道一起抬高）', creeperAnim.flashed, JSON.stringify(creeperAnim));
 
 console.log('\n================ 生物系统验证 ================');
 let pass = 0;

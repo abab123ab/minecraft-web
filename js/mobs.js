@@ -283,12 +283,16 @@ export class MobManager {
       m.mesh.scale.set(sx, sy, sz);
 
       const l = ctx.light === undefined ? 1 : ctx.light;
-      let flashBoost = m.hurtFlash > 0 ? l * 0.35 : 0;
+      // 挨打闪红：只压绿蓝、保留红通道（和原版一致）
+      const base = m.hurtFlash > 0 ? Math.max(0, l - l * 0.35) : l;
+      // 苦力怕引信闪烁是闪**白**：三个通道一起抬高，越接近爆炸越白。
+      // 以前这里跟挨打共用同一个「压绿蓝」的量，结果苦力怕鼓胀时整只变成暗红色。
+      let white = 0;
       if (m.fuse >= 0 && m.fuse < 1.5) {
         const k = 1 - (m.fuse / 1.5);
-        if (k > 0.6) flashBoost += (k - 0.6) * 2.6;
+        if (k > 0.6) white = (k - 0.6) * 2.6;
       }
-      m.mesh.material.color.setRGB(l, Math.max(0, l - flashBoost), Math.max(0, l - flashBoost));
+      m.mesh.material.color.setRGB(base + white, base + white, base + white);
     }
 
     this.updateArrows(dt, player, ctx);
