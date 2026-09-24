@@ -95,6 +95,7 @@ export class Sky {
     const light = 0.30 + 0.70 * amt;
     this.light = light;
     this.world.matOpaque.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
+    this.world.matCutout.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
     this.world.matWater.color.setRGB(light, light, light);
     this.world.matGlass.color.setRGB(light, light, light);
     const a = this.timeOfDay * Math.PI * 2 - Math.PI / 2;

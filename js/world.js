@@ -32,6 +32,14 @@ export class World {
     this.atlasCanvas = atlasCanvas;
 
     this.matOpaque = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, color: 0xffffff });
+    // 镂空通道：树叶、床这种贴图里有「全透明像素」的方块。不透明混合、靠 alphaTest
+    // 直接丢弃透明像素 —— 这样深度照样写，后面该挡的东西还是挡得住，
+    // 不像玻璃那样要关 depthWrite 再排渲染顺序。
+    // DoubleSide 是给树叶用的：叶隙里能看见叶子背面的那一层。
+    this.matCutout = new THREE.MeshBasicMaterial({
+      map: tex, vertexColors: true, alphaTest: 0.5,
+      side: THREE.DoubleSide, color: 0xffffff
+    });
     this.matWater = new THREE.MeshBasicMaterial({
       map: tex, vertexColors: true, transparent: true, opacity: 0.72,
       depthWrite: false, side: THREE.DoubleSide, color: 0xffffff
@@ -147,7 +155,7 @@ export class World {
       generated: false,
       secDirty: new Uint8Array(SEC_COUNT).fill(1),
       lightStale: 1,
-      secs: Array.from({ length: SEC_COUNT }, () => ({ o: null, w: null, g: null }))
+      secs: Array.from({ length: SEC_COUNT }, () => ({ o: null, c: null, w: null, g: null }))
     };
     this.chunks.set(k, ch);
     generateChunk(ch);
@@ -211,10 +219,10 @@ export class World {
 
   disposeChunk(ch) {
     for (const s of ch.secs) {
-      for (const m of [s.o, s.w, s.g]) {
+      for (const m of [s.o, s.c, s.w, s.g]) {
         if (m) { this.scene.remove(m); m.geometry.dispose(); }
       }
-      s.o = s.w = s.g = null;
+      s.o = s.c = s.w = s.g = null;
     }
     this.dirty.delete(ch);
   }
@@ -233,10 +241,11 @@ export class World {
       getChunk: (cx, cz) => this.chunks.get(this.key(cx, cz)),
       useAO: this.useAO
     };
-    const { opaque, water, glass } = buildSectionBatches(ch, si, ctx);
+    const { opaque, cutout, glass, water } = buildSectionBatches(ch, si, ctx);
     setSectionMesh(this.scene, ch, si, 'o', opaque, this.matOpaque, 0);
-    setSectionMesh(this.scene, ch, si, 'g', glass, this.matGlass, 1);
-    setSectionMesh(this.scene, ch, si, 'w', water, this.matWater, 2);
+    setSectionMesh(this.scene, ch, si, 'c', cutout, this.matCutout, 1);
+    setSectionMesh(this.scene, ch, si, 'g', glass, this.matGlass, 2);
+    setSectionMesh(this.scene, ch, si, 'w', water, this.matWater, 3);
   }
 
   buildMesh(ch) {

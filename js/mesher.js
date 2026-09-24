@@ -67,6 +67,7 @@ export function buildSectionBatches(ch, si, ctx) {
   const litAt = (x, y, z) => pick(litGrid, x, y, z) || 0;
 
   const opaque = { pos: [], uv: [], col: [], idx: [] };
+  const cutout = { pos: [], uv: [], col: [], idx: [] };
   const water = { pos: [], uv: [], col: [], idx: [] };
   const glass = { pos: [], uv: [], col: [], idx: [] };
 
@@ -92,6 +93,9 @@ export function buildSectionBatches(ch, si, ctx) {
           const face = FACES[f];
           const nb = get(x + face.dir[0], y + face.dir[1], z + face.dir[2]);
           const nbBlock = BLOCKS[nb];
+          // 同种方块贴在一起时中间那层不建面（玻璃除外：玻璃块的边框必须一块一块画出来）。
+          // 树叶也算 opaque，所以这里天然走「不建面」这条 —— 一片树冠只有外壳有面。
+          // 把树叶也放进这条例外里试过，树冠内部 6 面全建，镂空面数直接超过整个地形。
           if (nbBlock.opaque && !(nb === id && block.transparent)) continue;
           if (block.liquid) {
             if (nb === id) continue;
@@ -99,7 +103,8 @@ export function buildSectionBatches(ch, si, ctx) {
             if (face.dir[1] === 1 && nb !== AIR) continue;
           }
 
-          const target = block.liquid ? water : (block.transparent ? glass : opaque);
+          const target = block.liquid ? water
+            : (block.cutout ? cutout : (block.transparent ? glass : opaque));
           const tileName = tiles[face.tile];
           const ti = TILE_INDEX[tileName];
           const uvR = tileUV(ti === undefined ? 0 : ti);
@@ -170,7 +175,7 @@ export function buildSectionBatches(ch, si, ctx) {
     }
   }
 
-  return { opaque, water, glass };
+  return { opaque, cutout, water, glass };
 }
 
 export function setSectionMesh(scene, ch, si, prop, buf, material, order) {

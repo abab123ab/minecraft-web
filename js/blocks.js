@@ -17,6 +17,7 @@ function def(key, opts) {
     solid: true,
     opaque: true,
     transparent: false,
+    cutout: false,
     liquid: false,
     unbreakable: false,
     bonusDrop: null,
@@ -30,15 +31,18 @@ function def(key, opts) {
 
 def('air', { solid: false, opaque: false, unbreakable: true });
 
+// cutout：贴图里带「全透明」的像素，渲染时要直接丢弃，不能当不透明方块画。
+// 树叶的图 32.8%（云杉 37.5%）是镂空的叶隙 —— 以前靠 textures.js 的补洞把叶隙
+// 填成一个平色，整棵树就成了一块不透明的绿板，从树里抬头只能看见一片绿天花板。
 def('stone', { label: '石头', tiles: ['stone', 'stone', 'stone'], hardness: 1.5, tool: 'pickaxe', tier: 1, requiresTool: true, drop: 'cobblestone' });
 def('grass', { label: '草方块', tiles: ['grass_top', 'grass_side', 'dirt'], hardness: 0.6, tool: 'shovel', tier: 0, drop: 'dirt', sound: 'grass' });
 def('dirt', { label: '泥土', tiles: ['dirt', 'dirt', 'dirt'], hardness: 0.5, tool: 'shovel', tier: 0, sound: 'dirt' });
 def('cobblestone', { label: '圆石', tiles: ['cobblestone', 'cobblestone', 'cobblestone'], hardness: 2.0, tool: 'pickaxe', tier: 1, requiresTool: true });
 def('planks', { label: '木板', tiles: ['planks', 'planks', 'planks'], hardness: 2.0, tool: 'axe', tier: 0, sound: 'wood' });
 def('log', { label: '橡树原木', tiles: ['log_top', 'log_side', 'log_top'], hardness: 2.0, tool: 'axe', tier: 0, sound: 'wood' });
-def('leaves', { label: '橡树树叶', tiles: ['leaves', 'leaves', 'leaves'], hardness: 0.2, tool: null, tier: 0, drop: null, bonusDrop: { key: 'apple', chance: 0.05 }, sound: 'leaves' });
+def('leaves', { label: '橡树树叶', tiles: ['leaves', 'leaves', 'leaves'], hardness: 0.2, tool: null, tier: 0, drop: null, bonusDrop: { key: 'apple', chance: 0.05 }, sound: 'leaves', cutout: true });
 def('spruce_log', { label: '云杉原木', tiles: ['spruce_log_top', 'spruce_log_side', 'spruce_log_top'], hardness: 2.0, tool: 'axe', tier: 0, sound: 'wood' });
-def('spruce_leaves', { label: '云杉树叶', tiles: ['spruce_leaves', 'spruce_leaves', 'spruce_leaves'], hardness: 0.2, tool: null, tier: 0, drop: null, sound: 'leaves' });
+def('spruce_leaves', { label: '云杉树叶', tiles: ['spruce_leaves', 'spruce_leaves', 'spruce_leaves'], hardness: 0.2, tool: null, tier: 0, drop: null, sound: 'leaves', cutout: true });
 def('sand', { label: '沙子', tiles: ['sand', 'sand', 'sand'], hardness: 0.5, tool: 'shovel', tier: 0, sound: 'sand' });
 def('sandstone', { label: '砂岩', tiles: ['sandstone_top', 'sandstone_side', 'sandstone_top'], hardness: 0.8, tool: 'pickaxe', tier: 1, requiresTool: true });
 def('gravel', { label: '沙砾', tiles: ['gravel', 'gravel', 'gravel'], hardness: 0.6, tool: 'shovel', tier: 0, sound: 'gravel' });

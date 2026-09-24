@@ -85,8 +85,6 @@ const TINT = {
   leather_boots: LEATHER
 };
 
-const OPAQUE = { leaves: 1, spruce_leaves: 1 };
-
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -128,7 +126,6 @@ export async function buildAtlas(base) {
     const x = col * TILE;
     const y = row * TILE;
     ctx.drawImage(images[i], 0, 0, TILE, TILE, x, y, TILE, TILE);
-    if (OPAQUE[name]) fillHoles(ctx, x, y);
     const tint = TINT[name];
     if (tint) applyTint(ctx, x, y, tint);
     TILE_NAMES.push(name);
@@ -136,23 +133,6 @@ export async function buildAtlas(base) {
   });
 
   return canvas;
-}
-
-function fillHoles(ctx, x, y) {
-  const d = ctx.getImageData(x, y, TILE, TILE);
-  const p = d.data;
-  let r = 0, g = 0, b = 0, n = 0;
-  for (let i = 0; i < p.length; i += 4) {
-    if (p[i + 3] > 8) { r += p[i]; g += p[i + 1]; b += p[i + 2]; n++; }
-  }
-  if (!n) return;
-  r = (r / n) * 0.8;
-  g = (g / n) * 0.8;
-  b = (b / n) * 0.8;
-  for (let i = 0; i < p.length; i += 4) {
-    if (p[i + 3] <= 8) { p[i] = r; p[i + 1] = g; p[i + 2] = b; p[i + 3] = 255; }
-  }
-  ctx.putImageData(d, x, y);
 }
 
 function applyTint(ctx, x, y, tint) {
