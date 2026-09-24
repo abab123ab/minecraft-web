@@ -170,6 +170,34 @@ const skyColor = await ev(`(function(){
 })()`);
 check('太阳/月亮/云的贴图都是 sRGB', skyColor === 'srgb,srgb,srgb', skyColor);
 
+// sun.png / moon_phases.png 本身没有 alpha 通道（alpha 全是 255），是「黑底发光图」。
+// 不做处理的话 sprite 会在天上画一个不透明黑方块。sky.js 会按亮度反推 alpha 换掉 image，
+// 这条断言就是盯着那一步有没有生效：换成 canvas 之后，背景必须变成真透明。
+const skyAlpha = await ev(`(function(){
+  const g = window.game;
+  const s = g.sky;
+  if (!s || !s.sun || !s.moon) return null;
+  const read = function(sprite){
+    const img = sprite.material.map.image;
+    if (!img || !img.getContext) return null;
+    const ctx = img.getContext('2d');
+    const d = ctx.getImageData(0, 0, img.width, img.height).data;
+    let trans = 0, op = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] <= 8) trans++;
+      else if (d[i + 3] >= 248) op++;
+    }
+    return { w: img.width, h: img.height, 全透: trans, 不透明: op };
+  };
+  return { sun: read(s.sun), moon: read(s.moon) };
+})()`);
+check('太阳贴图有真透明背景（不是不透明黑方块）',
+  skyAlpha && skyAlpha.sun && skyAlpha.sun.全透 > skyAlpha.sun.w * skyAlpha.sun.h * 0.5,
+  skyAlpha && skyAlpha.sun);
+check('月亮贴图的黑底被抹掉了（半张图以上是全透明）',
+  skyAlpha && skyAlpha.moon && skyAlpha.moon.全透 > skyAlpha.moon.w * skyAlpha.moon.h * 0.5,
+  skyAlpha && skyAlpha.moon);
+
 // 用真实渲染验证：同一张画布，标了 sRGB 和不标，屏幕上差多少
 const shift = await ev(`(async function(){
   const THREE = await import('/js/vendor/three.module.js');

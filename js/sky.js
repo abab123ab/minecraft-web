@@ -31,8 +31,41 @@ export class Sky {
       return t;
     };
 
-    const sunTex = pixel(loader.load('textures/environment/sun.png'));
-    const moonTex = pixel(loader.load('textures/environment/moon_phases.png'));
+    // sun.png / moon_phases.png 都没有 alpha 通道 —— 逐像素量过，两张图的 alpha 全是 255。
+    // 它们是「黑底上的发光图」：太阳是黑底 + 一圈暖白光晕，月亮是深蓝底 + 月相。
+    // 直接当 sprite 贴上去，就是一个不透明的黑方块飘在天上（截图里看着像一块烧焦的砖）。
+    //
+    // 这里按亮度反推 alpha：alpha = max(r,g,b)，再把 rgb 反预乘回去。
+    // 混合时颜色会乘一次 alpha，不除回去的话发光部分会整体变暗；
+    // 除回去之后，黑底上的原画面和原来一模一样，只是黑底变成透明的了。
+    // 亮度低于 48 的一律当背景抹掉 —— 月亮那格的黑底就是靠这一刀去掉的（月亮本体 64 以上）。
+    const glow = (t) => {
+      const img = t.image;
+      if (!img || !img.width) return t;
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height);
+      const p = d.data;
+      for (let i = 0; i < p.length; i += 4) {
+        const a = Math.max(p[i], p[i + 1], p[i + 2]);
+        if (a < 48) { p[i] = 0; p[i + 1] = 0; p[i + 2] = 0; p[i + 3] = 0; continue; }
+        const k = 255 / a;
+        p[i] = Math.min(255, p[i] * k);
+        p[i + 1] = Math.min(255, p[i + 1] * k);
+        p[i + 2] = Math.min(255, p[i + 2] * k);
+        p[i + 3] = a;
+      }
+      ctx.putImageData(d, 0, 0);
+      t.image = c;
+      t.needsUpdate = true;
+      return t;
+    };
+
+    const sunTex = glow(pixel(loader.load('textures/environment/sun.png', glow)));
+    const moonTex = pixel(loader.load('textures/environment/moon_phases.png', glow));
     moonTex.repeat.set(0.25, 0.5);
     moonTex.offset.set(0, 0.5);
 
