@@ -62,28 +62,36 @@ const src = fs.readFileSync(new URL('../js/mobtex.js', import.meta.url), 'utf8')
 const m = src.match(/const PART = (\{[\s\S]*?\n\});/);
 const PART = eval('(' + m[1] + ')');
 
+function size(rect) {
+  const rot = rect[4] ? 1 : 0;
+  return { w: rot ? rect[3] : rect[2], h: rot ? rect[2] : rect[3], rot };
+}
+
 function compose(type, img) {
   const p = PART[type];
-  const legW = p.leg[2];
+  const body = size(p.body), leg = size(p.leg), head = size(p.head);
+  const legW = leg.w;
   const legTotal = legW * 2 + p.gap;
-  const bodyY = p.peek === 0 ? p.head[3] : p.peek;
-  const legY = bodyY + p.body[3] - 1 + (p.legGap || 0);
-  const w = Math.max(p.head[2], p.body[2], legTotal);
-  const h = legY + p.leg[3];
+  const bodyY = p.peek === 0 ? head.h : p.peek;
+  const legY = bodyY + body.h - 1 + (p.legGap || 0);
+  const w = Math.max(head.w, body.w, legTotal);
+  const h = legY + leg.h;
   const grid = new Array(w * h).fill(null).map(() => [0, 0, 0, 0]);
   const put = (rect, dx, dy) => {
-    for (let y = 0; y < rect[3]; y++) {
-      for (let x = 0; x < rect[2]; x++) {
-        const s = img.px(rect[0] + x, rect[1] + y);
-        if (s[3] > 16) grid[(dy + y) * w + (dx + x)] = s;
+    const s = size(rect);
+    const at = (x, y) => (rect[4] ? img.px(rect[0] + y, rect[1] + rect[3] - 1 - x) : img.px(rect[0] + x, rect[1] + y));
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const c = at(x, y);
+        if (c[3] > 16) grid[(dy + y) * w + (dx + x)] = c;
       }
     }
   };
-  put(p.body, ((w - p.body[2]) / 2) | 0, bodyY);
+  put(p.body, ((w - body.w) / 2) | 0, bodyY);
   const lx = ((w - legTotal) / 2) | 0;
   put(p.leg, lx, legY);
   put(p.leg, lx + legW + p.gap, legY);
-  put(p.head, ((w - p.head[2]) / 2) | 0, 0);
+  put(p.head, ((w - head.w) / 2) | 0, 0);
   return { w, h, grid };
 }
 

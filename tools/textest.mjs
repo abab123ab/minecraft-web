@@ -246,10 +246,11 @@ check('钻石甲没被皮甲染色波及', armor.diamond_helmet && armor.diamond
 
 // ---- C 生物立绘的裁剪框不能骑到贴图的透明缝上 ----
 const crops = await ev(`(async function(){
-  const { PART, compose } = await import('/js/mobtex.js');
+  const { PART, compose, partSize } = await import('/js/mobtex.js');
   const types = Object.keys(PART);
   const rects = [];
   const comps = [];
+  const fronts = [];
   for (const t of types) {
     const img = new Image();
     await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'textures/entity/' + t + '.png'; });
@@ -260,10 +261,48 @@ const crops = await ev(`(async function(){
     const d = cx.getImageData(0, 0, c.width, c.height).data;
     const SW = c.width;
     const px = (x, y) => { const i = (y * SW + x) * 4; return [d[i], d[i+1], d[i+2], d[i+3]]; };
-
     const p = PART[t];
+
+    // 头的裁剪框必须是「立方体展开图」里的正面。
+    //
+    // 这七张图是 MC 的皮肤图：某个盒子 (u0,v0,w,h,d) 的六个面按固定位置摊开，
+    // 正面精确落在 (u0+d, v0+d, w, h)。所以反查一遍 —— 如果存在一个盒子，
+    // 它的六个面都有像素、且展开包围盒里那两个不属于任何面的 d x d 角是透明的，
+    // 那么这个框就是一块真实存在的正面的位置。
+    //
+    // 为什么光查「框里有像素」不够：侧脸那一块同样有像素。当初牛头写的是
+    // [8,8,8,6]，右眼加半个侧脸全在里面，看上去一切正常，实际脸是歪的。
+    // 这条规则恰好否掉它，放行 7 个正确的头。
+    const opaqueBox = (x, y, w, h) => {
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (px(x + i, y + j)[3] <= 16) return false;
+      return true;
+    };
+    const clearBox = (x, y, w, h) => {
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (px(x + i, y + j)[3] > 16) return false;
+      return true;
+    };
+    const head = p.head;
+    let front = 0;
+    for (let d = 1; d <= 10 && !front; d++) {
+      const u0 = head[0] - d, v0 = head[1] - d, w = head[2], h = head[3];
+      if (u0 < 0 || v0 < 0) continue;
+      const six = [
+        [u0 + d, v0, w, d], [u0 + d + w, v0, w, d],
+        [u0, v0 + d, d, h], [head[0], head[1], w, h],
+        [u0 + d + w, v0 + d, d, h], [u0 + d + w + d, v0 + d, w, h]
+      ];
+      if (six.some((f) => f[0] < 0 || f[1] < 0 || f[0] + f[2] > c.width || f[1] + f[3] > c.height)) continue;
+      if (!six.every((f) => opaqueBox(f[0], f[1], f[2], f[3]))) continue;
+      if (!clearBox(u0, v0, d, d)) continue;
+      if (!clearBox(u0 + d + 2 * w, v0, d, d)) continue;
+      front = d;
+    }
+    fronts.push({ t, r: head, front });
+
     for (const name of ['head', 'body', 'leg']) {
       const r = p[name];
+      // 扫的是「裁剪框在源图里覆盖的那块面积」。带 rot 的框只是把这同一批
+      // 源像素转个方向再贴，覆盖的像素集合没变，所以这里按 r[2] x r[3] 扫是对的。
       let n = 0, tot = 0;
       for (let y = 0; y < r[3]; y++) for (let x = 0; x < r[2]; x++) { tot++; if (px(r[0] + x, r[1] + y)[3] > 16) n++; }
       rects.push({ t, name, r, pct: n / tot * 100 });
@@ -275,16 +314,17 @@ const crops = await ev(`(async function(){
     const cc = canvas.getContext('2d');
     const cd = cc.getImageData(0, 0, canvas.width, canvas.height).data;
     const W = canvas.width, H = canvas.height;
-    const legW = p.leg[2];
+    const legW = partSize(p.leg).w;
     const legTotal = legW * 2 + p.gap;
-    const bodyY = p.peek === 0 ? p.head[3] : p.peek;
-    const legY = bodyY + p.body[3] - 1 + (p.legGap || 0);
+    const bodyY = p.peek === 0 ? partSize(p.head).h : p.peek;
+    const legY = bodyY + partSize(p.body).h - 1 + (p.legGap || 0);
     const lx = ((W - legTotal) / 2) | 0;
+    // 粘贴位置要按「转完之后的尺寸」算，跟 compose() 里的排布逐项对齐。
     const boxes = [
-      [((W - p.body[2]) / 2) | 0, bodyY, p.body[2], p.body[3]],
-      [((W - p.head[2]) / 2) | 0, 0, p.head[2], p.head[3]],
-      [lx, legY, legW, p.leg[3]],
-      [lx + legW + p.gap, legY, legW, p.leg[3]]
+      [((W - partSize(p.body).w) / 2) | 0, bodyY, partSize(p.body).w, partSize(p.body).h],
+      [((W - partSize(p.head).w) / 2) | 0, 0, partSize(p.head).w, partSize(p.head).h],
+      [lx, legY, legW, partSize(p.leg).h],
+      [lx + legW + p.gap, legY, legW, partSize(p.leg).h]
     ];
     let holes = 0, area = 0, trans = 0;
     for (const b of boxes) {
@@ -299,7 +339,7 @@ const crops = await ev(`(async function(){
     for (let i = 3; i < cd.length; i += 4) if (cd[i] <= 16) trans++;
     comps.push({ t, w: W, h: H, holes, area, trans });
   }
-  return { rects, comps };
+  return { rects, comps, fronts };
 })()`);
 
 // 骨架的胸腔是贴图本身画成「骨头之间留空」的，所以它的身子框允许有洞，
@@ -313,6 +353,13 @@ check('除骨架身子外，裁剪框全部 100% 落在真实面板里（不合�
 const skel = crops.rects.find((r) => r.t === 'skeleton' && r.name === 'body');
 check('骨架身子框确实是有洞的那种面板（' + (skel ? skel.pct.toFixed(1) : '?') + '%，靠补色填平）',
   !!skel && skel.pct < 100, skel ? skel.pct.toFixed(1) + '%' : '没有这个框');
+
+// 头的裁剪框必须是立方体展开图里的正面。这是「生物的脸是歪的」那个 bug 的
+// 回归网 —— 光靠上面那条「框里有像素」是抓不住的，侧脸那块同样有像素。
+const badFaces = crops.fronts.filter((f) => !f.front);
+check('七张脸都取自立方体展开图的正面（不合格 ' + badFaces.length + ' 个）',
+  crops.fronts.length === 7 && badFaces.length === 0,
+  badFaces.map((f) => f.t + ' ' + JSON.stringify(f.r)).join(' | '));
 
 const badComps = crops.comps.filter((c) => c.holes !== 0);
 check('七张立绘的部件区都没有透明像素（破洞）',

@@ -7,17 +7,35 @@ import * as THREE from './vendor/three.module.js';
 // 立绘再被 alphaTest 一抠，生物身上就出现竖着的破洞（猪的肚子、
 // 鸡的脸都中过这个招）。改这里的数字之前先确认框里没有透明像素。
 //
+// 四足动物（猪牛羊鸡）的「头」要取**正面**那一块，也就是展开图里
+// 位于 (u0+d, v0+d) 的地方 —— u0,v0 是这块贴图的原点，d 是头的厚度。
+// 猪的头 8x8x8 → 正面在 (8,8)；牛的头 8x8x6 → 正面在 (6,6)；
+// 羊的头 6x6x8 → 正面在 (8,8) 且只有 6x6；鸡的头 4x6x3 → 正面在 (3,3)。
+// 以前牛和羊写的是 (8,8,8,6)，取到的是「偏了一格的眼睛 + 侧脸」，
+// 所以牛看起来像戴了眼罩。
+//
+// 身子在贴图里是**立着**的长条（贴图竖轴放的是身子的长度），
+// 所以标了 rot 的框会先顺时针转 90° 再贴，这样身子才是横躺的。
+// 人形（僵尸/骷髅/苦力怕）的身子本来就是竖的，不转。
+//
 // 骨架的胸腔是骨头之间留空的，那是贴图本身画成这样；这种「框内的洞」
 // 由 compose() 逐行补色填掉，所以骨架也需要框住正确的面板。
 export const PART = {
-  pig:      { head: [8, 8, 8, 8],  body: [36, 8, 16, 8], leg: [4, 20, 4, 6],  peek: 8, gap: 2 },
-  cow:      { head: [8, 8, 8, 6],  body: [6, 4, 10, 8],  leg: [4, 20, 4, 6],  peek: 6, gap: 2 },
-  sheep:    { head: [8, 8, 8, 6],  body: [34, 16, 8, 14], leg: [4, 20, 4, 6], peek: 2, gap: 2 },
-  chicken:  { head: [3, 3, 6, 4],  body: [6, 15, 6, 8],  leg: [30, 15, 2, 5], peek: 1, gap: 2 },
-  zombie:   { head: [8, 8, 8, 8],  body: [20, 20, 8, 12], leg: [4, 20, 4, 12], peek: 0, gap: 2 },
-  skeleton: { head: [8, 8, 8, 8],  body: [20, 20, 8, 12], leg: [4, 20, 4, 10], peek: 0, gap: 2, legGap: -4 },
-  creeper:  { head: [8, 8, 8, 8],  body: [20, 20, 8, 12], leg: [4, 20, 4, 6],  peek: 0, gap: 2 }
+  pig:      { head: [8, 8, 8, 8],  body: [28, 16, 8, 16, 1],  leg: [4, 20, 4, 6],  peek: 8, gap: 2 },
+  cow:      { head: [6, 6, 8, 8],  body: [18, 14, 10, 18, 1], leg: [4, 20, 4, 12], peek: 8, gap: 3 },
+  sheep:    { head: [8, 8, 6, 6],  body: [42, 14, 6, 16, 1],  leg: [4, 20, 4, 12], peek: 6, gap: 3 },
+  chicken:  { head: [3, 3, 4, 6],  body: [0, 15, 6, 8, 1],    leg: [30, 15, 2, 5], peek: 6, gap: 2 },
+  zombie:   { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [4, 20, 4, 12], peek: 0, gap: 2 },
+  skeleton: { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [2, 18, 2, 12], peek: 0, gap: 3, legGap: -4 },
+  creeper:  { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [4, 20, 4, 6],  peek: 0, gap: 2 }
 };
+
+// 裁剪框写成 [x, y, w, h, rot?]；rot=1 时先顺时针转 90° 再贴。
+// 转完之后的宽高是 w/h 对调，排布时要按转完的尺寸算。
+export function partSize(rect) {
+  const rot = rect[4] ? 1 : 0;
+  return { w: rot ? rect[3] : rect[2], h: rot ? rect[2] : rect[3], rot };
+}
 
 const TYPES = Object.keys(PART);
 
@@ -36,13 +54,20 @@ function loadImage(src) {
 // 骨架的胸腔本来就是「骨头之间留空」画的，直接铺上去的话胸口是一片窟窿，
 // 能透过身子看见后面的草地。补的办法是逐行取该行不透明像素的平均色 ——
 // 洞被填平了，但同一行里的横向明暗还在，所以看上去还是一副肋骨架。
+//
+// rect 的第五项为真时，先把这块贴图顺时针转 90° 再贴
+// （四足动物的身子在贴图里是竖着的长条，转过来才是横躺的）。
 function putPart(buf, ow, oh, px, rect, dx, dy) {
-  const rw = rect[2], rh = rect[3];
+  const rot = rect[4] ? 1 : 0;
+  const sw = rect[2], sh = rect[3];
+  const rw = rot ? sh : sw, rh = rot ? sw : sh;
+  const src = (x, y) => (rot ? px(rect[0] + y, rect[1] + sh - 1 - x) : px(rect[0] + x, rect[1] + y));
+
   const part = new Array(rw * rh);
   let ar = 0, ag = 0, ab = 0, an = 0;
   for (let y = 0; y < rh; y++) {
     for (let x = 0; x < rw; x++) {
-      const p = px(rect[0] + x, rect[1] + y);
+      const p = src(x, y);
       part[y * rw + x] = p;
       if (p[3] > 16) { ar += p[0]; ag += p[1]; ab += p[2]; an++; }
     }
@@ -80,12 +105,15 @@ function putPart(buf, ow, oh, px, rect, dx, dy) {
 
 export function compose(type, source) {
   const p = PART[type];
-  const legW = p.leg[2];
+  const body = partSize(p.body);
+  const leg = partSize(p.leg);
+  const head = partSize(p.head);
+  const legW = leg.w;
   const legTotal = legW * 2 + p.gap;
-  const bodyY = p.peek === 0 ? p.head[3] : p.peek;
-  const legY = bodyY + p.body[3] - 1 + (p.legGap || 0);
-  const w = Math.max(p.head[2], p.body[2], legTotal);
-  const h = legY + p.leg[3];
+  const bodyY = p.peek === 0 ? head.h : p.peek;
+  const legY = bodyY + body.h - 1 + (p.legGap || 0);
+  const w = Math.max(head.w, body.w, legTotal);
+  const h = legY + leg.h;
 
   // 一次性把整张皮肤图读成像素数组，避免逐像素往画布上问
   const sw = source.width, sh = source.height;
@@ -102,11 +130,11 @@ export function compose(type, source) {
   };
 
   const buf = new Uint8ClampedArray(w * h * 4);
-  putPart(buf, w, h, px, p.body, ((w - p.body[2]) / 2) | 0, bodyY);
+  putPart(buf, w, h, px, p.body, ((w - body.w) / 2) | 0, bodyY);
   const lx = ((w - legTotal) / 2) | 0;
   putPart(buf, w, h, px, p.leg, lx, legY);
   putPart(buf, w, h, px, p.leg, lx + legW + p.gap, legY);
-  putPart(buf, w, h, px, p.head, ((w - p.head[2]) / 2) | 0, 0);
+  putPart(buf, w, h, px, p.head, ((w - head.w) / 2) | 0, 0);
 
   const c = document.createElement('canvas');
   c.width = w;
