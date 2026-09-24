@@ -121,17 +121,17 @@ node serve.mjs &          # 浏览器套件要它
 node tools/runall.mjs
 ```
 
-13 个套件、404 条断言，全绿约 92 秒：
+13 个套件、419 条断言，全绿约 90 秒：
 
 | 套件 | 覆盖 |
 |---|---|
 | `minetest` | 挖掘耗时与掉落规则（纯逻辑，不开浏览器） |
 | `oredist` | 矿石层位分布与基岩层（纯 Node，1 秒） |
-| `minebrowser` | 挖掘端到端：真实事件驱动的挖/放/右键长按 |
+| `minebrowser` | 挖掘端到端：真实事件驱动的挖/放/右键长按/准星选中框（28 条） |
 | `lighttest` / `lightprop` / `meshlighttest` | 光照计算 / 传播 / 渲染 |
 | `mobtest` / `mobopttest` | 生物行为回归与性能优化 |
 | `orechaintest` | 连锁挖矿、砍树、掉落合并、耐久按格数扣 |
-| `invtest` | 背包与合成交互（76 条） |
+| `invtest` | 背包与合成交互（86 条） |
 | `layouttest` | HUD 布局 |
 | `bedtest` | 床与睡觉 |
 | `soundtest` | 音效调用 |
