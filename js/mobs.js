@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
 import { HEIGHT } from './worlddef.js';
 import { terrainHeight } from './worldgen.js';
-import { mobArt } from './mobtex.js';
+import { buildMobMesh } from './mobtex.js';
 
 const GRAVITY = 24;
 const DESPAWN_DIST = 72;
@@ -23,28 +23,27 @@ export const MOB_TYPES = {
 const PASSIVE = ['pig', 'cow', 'chicken', 'sheep'];
 const HOSTILE = ['zombie', 'skeleton', 'creeper'];
 
-const geoCache = new Map();
 const ARROW_GEO = new THREE.BoxGeometry(0.06, 0.06, 0.5);
 const ARROW_MAT = new THREE.MeshBasicMaterial({ color: 0x6b4a2a });
 
 function buildMesh(type) {
-  const art = mobArt[type];
-  const def = MOB_TYPES[type];
-  const h = def.h;
-  const w = Math.min(def.w, h * art.ratio);
-  let g = geoCache.get(type);
-  if (!g) {
-    g = new THREE.PlaneGeometry(w, h);
-    g.translate(0, h / 2, 0);
-    geoCache.set(type, g);
-  }
-  const mat = new THREE.MeshBasicMaterial({
-    map: art.tex,
-    transparent: true,
-    alphaTest: 0.5,
-    side: THREE.DoubleSide
-  });
-  return new THREE.Mesh(g, mat);
+  const g = buildMobMesh(type, MOB_TYPES[type]);
+  return g || new THREE.Group();
+}
+
+// 摆腿 / 摆胳膊：在块自己的轴心上绕 x 轴转（模型正面朝 +z，绕 x 转就是前后迈）
+function setSwing(list, angle) {
+  for (const pg of list) pg.rotation.x = (pg.userData.restX || 0) + angle;
+}
+
+// 挨打闪红 / 引信闪白 / 死亡淡出都要落到这只生物**所有**材质上
+// （鸡腿是没有贴图的纯色块，材质跟身上不一样）
+function tintMob(mesh, r, g, b) {
+  for (const mat of mesh.userData.mats) mat.color.setRGB(r, g, b);
+}
+
+function fadeMob(mesh, opacity) {
+  for (const mat of mesh.userData.mats) mat.opacity = opacity;
 }
 
 class Mob {
@@ -126,7 +125,10 @@ export class MobManager {
   remove(i) {
     const m = this.list[i];
     this.scene.remove(m.mesh);
-    m.mesh.material.dispose();
+    // 网格现在是个 Group：几何是一块一块建的，材质是这只生物自己一份。
+    // 贴图是七只共用的，不能dispose。
+    m.mesh.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    for (const mat of m.mesh.userData.mats || []) mat.dispose();
     this.list.splice(i, 1);
   }
 
@@ -260,11 +262,18 @@ export class MobManager {
         shakeRot = Math.sin(m.age * 65) * a * 0.14;
       }
       m.mesh.position.set(m.pos.x + shakeX, m.pos.y + yOff, m.pos.z + shakeZ);
-      m.mesh.rotation.set(
-        tiltX + shakeRot,
-        Math.atan2(this.camera.position.x - m.pos.x, this.camera.position.z - m.pos.z),
-        tiltZ + shakeRot
-      );
+      // 朝向用生物自己走的那个方向（m.yaw），不再永远正对相机 ——
+      // 以前那样做是因为它是一张纸片，只有正对相机才「看起来像」。
+      m.mesh.rotation.set(tiltX + shakeRot, m.yaw, tiltZ + shakeRot);
+
+      // 迈步：对角腿反相（前左配后右），人形另外把胳膊反向摆一点
+      const gait = m.onGround && !m.inWater && hs > 0.4 ? Math.min(0.85, hs * 0.5) : 0;
+      const sw = Math.sin(m.walkPhase) * gait;
+      const ud = m.mesh.userData;
+      setSwing(ud.legs, sw);
+      setSwing(ud.legsB, -sw);
+      setSwing(ud.arms, -sw * 0.6);
+      setSwing(ud.armsB, sw * 0.6);
 
       let sx = 1, sy = 1, sz = 1;
       if (m.fuse >= 0 && m.fuse < 1.5) {
@@ -283,8 +292,9 @@ export class MobManager {
       m.mesh.scale.set(sx, sy, sz);
 
       const l = ctx.light === undefined ? 1 : ctx.light;
-      // 挨打闪红：只压绿蓝、保留红通道（和原版一致）
-      const base = m.hurtFlash > 0 ? Math.max(0, l - l * 0.35) : l;
+      // 挨打闪红：红通道不动，只把绿蓝压下去才是「红」。
+      // 以前这里三个通道乘的是同一个系数，量出来整只只是发灰、并没变红。
+      const dim = m.hurtFlash > 0 ? 0.45 : 1;
       // 苦力怕引信闪烁是闪**白**：三个通道一起抬高，越接近爆炸越白。
       // 以前这里跟挨打共用同一个「压绿蓝」的量，结果苦力怕鼓胀时整只变成暗红色。
       let white = 0;
@@ -292,7 +302,7 @@ export class MobManager {
         const k = 1 - (m.fuse / 1.5);
         if (k > 0.6) white = (k - 0.6) * 2.6;
       }
-      m.mesh.material.color.setRGB(base + white, base + white, base + white);
+      tintMob(m.mesh, l + white, l * dim + white, l * dim + white);
     }
 
     this.updateArrows(dt, player, ctx);
@@ -314,8 +324,8 @@ export class MobManager {
     this.moveAxis(m, 'x', m.vel.x * dt);
     this.moveAxis(m, 'z', m.vel.z * dt);
     m.mesh.position.set(m.pos.x, m.pos.y, m.pos.z);
-    m.mesh.rotation.set(0, m.mesh.rotation.y, -k * Math.PI / 2 + m.dieRoll * k);
-    m.mesh.material.opacity = 1 - k * 0.85;
+    m.mesh.rotation.set(0, m.yaw, -k * Math.PI / 2 + m.dieRoll * k);
+    fadeMob(m.mesh, 1 - k * 0.85);
     m.mesh.scale.set(1, 1, 1);
     if (k >= 1) {
       this.kill(m, i, ctx);

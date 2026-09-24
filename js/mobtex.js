@@ -1,43 +1,150 @@
 import * as THREE from './vendor/three.module.js';
 
-// 每种生物的立绘从贴图里裁三块拼出来：头、身子、腿。
+// 生物不是一张贴纸，是一堆长方体拼起来的 3D 模型。
 //
-// 裁剪框必须整个落在「一块真实面板」里。这七张贴图是 64x32 的皮肤图，
-// 面板之间夹着透明的缝，框要是骑到缝上，那条缝就会被一起裁进立绘 ——
-// 立绘再被 alphaTest 一抠，生物身上就出现竖着的破洞（猪的肚子、
-// 鸡的脸都中过这个招）。改这里的数字之前先确认框里没有透明像素。
+// 每只生物 = 若干个「块」：头、身子、四条腿（四足），或者头、身子、两只胳膊、
+// 两条腿（人形）。每个块是个长方体，六个面各自从皮肤图上裁出对应那一块贴上去。
+// 整只按自己的朝向转，所以你绕到它侧面看到的是侧面、走到背后看到的是屁股。
 //
-// 四足动物（猪牛羊鸡）的「头」要取**正面**那一块，也就是展开图里
-// 位于 (u0+d, v0+d) 的地方 —— u0,v0 是这块贴图的原点，d 是头的厚度。
-// 猪的头 8x8x8 → 正面在 (8,8)；牛的头 8x8x6 → 正面在 (6,6)；
-// 羊的头 6x6x8 → 正面在 (8,8) 且只有 6x6；鸡的头 4x6x3 → 正面在 (3,3)。
-// 以前牛和羊写的是 (8,8,8,6)，取到的是「偏了一格的眼睛 + 侧脸」，
-// 所以牛看起来像戴了眼罩。
+// 坐标一律沿用 MC 的模型空间（单位：贴图像素，16px = 1 方块）：
+//   x 向右为正、y 向下为正、z 朝前为负。
+// 最后在 buildMobMesh 里整体翻一下（y 和 z 同时取反，是个干净的 180° 旋转，
+// 不会把贴图镜像），再缩放到底座贴地、总高等于判定框高度。
 //
-// 身子在贴图里是**立着**的长条（贴图竖轴放的是身子的长度），
-// 所以标了 rot 的框会先顺时针转 90° 再贴，这样身子才是横躺的。
-// 人形（僵尸/骷髅/苦力怕）的身子本来就是竖的，不转。
+// 每块的三个几何量：
+//   pivot  旋转轴心（MC 的 setRotationPoint）。腿就是绕这里前后摆的。
+//   box    相对轴心的方框（MC 的 addBox：x/y/z 是起点，w/h/d 是三条棱长）。
+//   tex    这块贴在皮肤图上的展开原点 (u,v) 和三条棱长。
+//   rotX   绕 x 轴先转一下（MC 给四足动物的身子加的 π/2 ——
+//          身子在贴图里是竖着的长条，转过来才是横躺的）。
 //
-// 骨架的胸腔是骨头之间留空的，那是贴图本身画成这样；这种「框内的洞」
-// 由 compose() 逐行补色填掉，所以骨架也需要框住正确的面板。
-export const PART = {
-  pig:      { head: [8, 8, 8, 8],  body: [28, 16, 8, 16, 1],  leg: [4, 20, 4, 6],  peek: 8, gap: 2 },
-  cow:      { head: [6, 6, 8, 8],  body: [18, 14, 10, 18, 1], leg: [4, 20, 4, 12], peek: 8, gap: 3 },
-  sheep:    { head: [8, 8, 6, 6],  body: [42, 14, 6, 16, 1],  leg: [4, 20, 4, 12], peek: 6, gap: 3 },
-  chicken:  { head: [3, 3, 4, 6],  body: [0, 15, 6, 8, 1],    leg: [30, 15, 2, 5], peek: 6, gap: 2 },
-  zombie:   { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [4, 20, 4, 12], peek: 0, gap: 2 },
-  skeleton: { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [2, 18, 2, 12], peek: 0, gap: 3, legGap: -4 },
-  creeper:  { head: [8, 8, 8, 8],  body: [20, 20, 8, 12],     leg: [4, 20, 4, 6],  peek: 0, gap: 2 }
-};
+// 带 parent 的块挂在父块上（猪鼻子跟头走、鸡嘴跟头走）。
+// anim 标记会动的块：同名的用同一相位，legA/legB 反相（对角腿一起迈）。
 
-// 裁剪框写成 [x, y, w, h, rot?]；rot=1 时先顺时针转 90° 再贴。
-// 转完之后的宽高是 w/h 对调，排布时要按转完的尺寸算。
-export function partSize(rect) {
-  const rot = rect[4] ? 1 : 0;
-  return { w: rot ? rect[3] : rect[2], h: rot ? rect[2] : rect[3], rot };
+const HALF = Math.PI / 2;
+// 僵尸/骷髅的胳膊不是垂着的，是往前平举的（ModelZombie 里 f2 = -π/2.25）
+const ARM_OUT = -Math.PI / 2.25;
+// 四足动物的腿：轴心的 y 是 24-height（height 是腿长），前腿 z=-5、后腿 z=+7。
+// 四条腿按对角线分成两组反相摆（leg1+leg4 一组、leg2+leg3 一组）。
+function quadLegs(height, w) {
+  const y = 24 - height;
+  const tex = [0, 16, 4, height, 4];
+  const box = [-2, 0, -2, 4, height, 4];
+  return [
+    { name: 'leg', tex, box, pivot: [-w, y, 7], anim: 'legA' },
+    { name: 'leg', tex, box, pivot: [w, y, 7], anim: 'legB' },
+    { name: 'leg', tex, box, pivot: [-w, y, -5], anim: 'legB' },
+    { name: 'leg', tex, box, pivot: [w, y, -5], anim: 'legA' }
+  ];
 }
 
-const TYPES = Object.keys(PART);
+// 各面在贴图里的排布（相对这块的 u,v），以及「贴图向右 / 向下」分别对应
+// 模型空间的哪个轴、哪个方向。推导依据：这块图是「从外面看」画的 ——
+// 比如 right 面是站在生物右侧看到的，那时画面右边指向生物的正面（-z）。
+// bright 是固定明暗（我们的引擎没有实体光照模型，靠这个把立体感做出来）：
+// 顶面最亮、底面最暗，侧面居中。
+const FACES = [
+  { key: 'px', rect: (w, h, d) => [0, d, d, h], uAxis: 2, uSign: -1, vAxis: 1, vSign: 1, bright: 0.78 },
+  { key: 'nx', rect: (w, h, d) => [d + w, d, d, h], uAxis: 2, uSign: 1, vAxis: 1, vSign: 1, bright: 0.78 },
+  { key: 'py', rect: (w, h, d) => [d, 0, w, d], uAxis: 0, uSign: 1, vAxis: 2, vSign: 1, bright: 1.0 },
+  { key: 'ny', rect: (w, h, d) => [d + w, 0, w, d], uAxis: 0, uSign: 1, vAxis: 2, vSign: -1, bright: 0.62 },
+  { key: 'nz', rect: (w, h, d) => [d, d, w, h], uAxis: 0, uSign: -1, vAxis: 1, vSign: 1, bright: 0.92 },
+  { key: 'pz', rect: (w, h, d) => [d + w + d, d, w, h], uAxis: 0, uSign: 1, vAxis: 1, vSign: 1, bright: 0.92 }
+];
+
+// 这个面在哪个轴上、固定在哪：
+// px → x 固定在上界，nx → x 固定在下界，以此类推。
+const FIXED = {
+  px: [0, 1], nx: [0, 0], py: [1, 0], ny: [1, 1], nz: [2, 0], pz: [2, 1]
+};
+
+export const MODEL = {
+  // 猪：ModelQuadruped(6) 出头/身/四条腿，ModelPig 把鼻子加在头上
+  pig: {
+    parts: [
+      { name: 'body', tex: [28, 8, 10, 16, 8], box: [-5, -10, -7, 10, 16, 8], pivot: [0, 11, 2], rotX: HALF },
+      { name: 'head', tex: [0, 0, 8, 8, 8], box: [-4, -4, -8, 8, 8, 8], pivot: [0, 12, -6] },
+      { name: 'snout', tex: [16, 16, 4, 3, 1], box: [-2, 0, -9, 4, 3, 1], pivot: [0, 0, 0], parent: 'head' },
+      ...quadLegs(6, 3)
+    ]
+  },
+  // 牛：ModelCow（身子比通用的更宽、还带乳房；头在最前、带两只角；腿更靠外、前腿更靠前）
+  cow: {
+    parts: [
+      { name: 'body', tex: [18, 4, 12, 18, 10], box: [-6, -10, -7, 12, 18, 10], pivot: [0, 5, 2], rotX: HALF },
+      { name: 'udder', tex: [52, 0, 4, 6, 1], box: [-2, 2, -8, 4, 6, 1], pivot: [0, 5, 2], rotX: HALF },
+      { name: 'head', tex: [0, 0, 8, 8, 6], box: [-4, -4, -6, 8, 8, 6], pivot: [0, 4, -8] },
+      { name: 'horn', tex: [22, 0, 1, 3, 1], box: [-5, -5, -4, 1, 3, 1], pivot: [0, 0, 0], parent: 'head' },
+      { name: 'horn', tex: [22, 0, 1, 3, 1], box: [4, -5, -4, 1, 3, 1], pivot: [0, 0, 0], parent: 'head' },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [-4, 12, 7], anim: 'legA' },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [4, 12, 7], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [-4, 12, -6], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [4, 12, -6], anim: 'legA' }
+    ]
+  },
+  // 羊：SheepModel（身子 8x16x6 是羊毛那层，头 6x6x8 挂得比身子高）
+  sheep: {
+    parts: [
+      { name: 'body', tex: [28, 8, 8, 16, 6], box: [-4, -10, -7, 8, 16, 6], pivot: [0, 5, 2], rotX: HALF },
+      { name: 'head', tex: [0, 0, 6, 6, 8], box: [-3, -4, -6, 6, 6, 8], pivot: [0, 6, -8] },
+      ...quadLegs(12, 3)
+    ]
+  },
+  // 鸡：ModelChicken（头 4x6x3 + 嘴 + 肉垂、身 6x8x6、两片翅膀、两条腿）
+  // 身子和四足动物一样要转 90°（MC 在 setRotationAngles 里给它 body.xRot = π/2）。
+  // 这张 chicken.png 的腿那一块（26,0）几乎全透明，贴上去等于没有腿，
+  // 所以腿用贴图上鸡嘴的橙色描成纯色块 —— 原版的鸡腿本来也就是一坨橙黄色。
+  chicken: {
+    legColor: 0xe8a33d,
+    parts: [
+      { name: 'body', tex: [0, 9, 6, 8, 6], box: [-3, -4, -3, 6, 8, 6], pivot: [0, 16, 0], rotX: HALF },
+      { name: 'head', tex: [0, 0, 4, 6, 3], box: [-2, -6, -2, 4, 6, 3], pivot: [0, 15, -4] },
+      { name: 'beak', tex: [14, 0, 4, 2, 2], box: [-2, -4, -4, 4, 2, 2], pivot: [0, 0, 0], parent: 'head' },
+      { name: 'wattle', tex: [14, 4, 2, 2, 2], box: [-1, -2, -3, 2, 2, 2], pivot: [0, 0, 0], parent: 'head' },
+      { name: 'wing', tex: [24, 13, 1, 4, 6], box: [0, 0, -3, 1, 4, 6], pivot: [-4, 13, 0] },
+      { name: 'wing', tex: [24, 13, 1, 4, 6], box: [-1, 0, -3, 1, 4, 6], pivot: [4, 13, 0], mirror: true },
+      { name: 'leg', box: [-1, 0, -3, 3, 5, 3], pivot: [-2, 19, 1], anim: 'legA', solid: true },
+      { name: 'leg', box: [-1, 0, -3, 3, 5, 3], pivot: [1, 19, 1], anim: 'legB', solid: true }
+    ]
+  },
+  // 僵尸：ModelZombie（人形。头 8x8x8、身 8x12x4、胳膊腿各 4x12x4；胳膊往前平举）
+  zombie: {
+    parts: [
+      { name: 'body', tex: [16, 16, 8, 12, 4], box: [-4, 0, -2, 8, 12, 4], pivot: [0, 0, 0] },
+      { name: 'head', tex: [0, 0, 8, 8, 8], box: [-4, -8, -4, 8, 8, 8], pivot: [0, 0, 0] },
+      { name: 'arm', tex: [40, 16, 4, 12, 4], box: [-3, -2, -2, 4, 12, 4], pivot: [-5, 2, 0], rotX: ARM_OUT, anim: 'armA' },
+      { name: 'arm', tex: [40, 16, 4, 12, 4], box: [-1, -2, -2, 4, 12, 4], pivot: [5, 2, 0], rotX: ARM_OUT, anim: 'armB', mirror: true },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [-2, 12, 0], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 4, 12, 4], box: [-2, 0, -2, 4, 12, 4], pivot: [2, 12, 0], anim: 'legA', mirror: true }
+    ]
+  },
+  // 骷髅：ModelSkeleton（人形，但胳膊腿都细一号：2x12x2；胳膊在 ±5 上）
+  skeleton: {
+    parts: [
+      { name: 'body', tex: [16, 16, 8, 12, 4], box: [-4, 0, -2, 8, 12, 4], pivot: [0, 0, 0] },
+      { name: 'head', tex: [0, 0, 8, 8, 8], box: [-4, -8, -4, 8, 8, 8], pivot: [0, 0, 0] },
+      { name: 'arm', tex: [40, 16, 2, 12, 2], box: [-1, -2, -1, 2, 12, 2], pivot: [-5, 2, 0], rotX: ARM_OUT, anim: 'armA' },
+      { name: 'arm', tex: [40, 16, 2, 12, 2], box: [-1, -2, -1, 2, 12, 2], pivot: [5, 2, 0], rotX: ARM_OUT, anim: 'armB', mirror: true },
+      { name: 'leg', tex: [0, 16, 2, 12, 2], box: [-1, 0, -1, 2, 12, 2], pivot: [-2, 12, 0], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 2, 12, 2], box: [-1, 0, -1, 2, 12, 2], pivot: [2, 12, 0], anim: 'legA', mirror: true }
+    ]
+  },
+  // 苦力怕：ModelCreeper（头 8x8x8、身 8x12x4、四条腿贴在外侧）
+  creeper: {
+    parts: [
+      { name: 'body', tex: [16, 16, 8, 12, 4], box: [-4, 0, -2, 8, 12, 4], pivot: [0, 6, 0] },
+      { name: 'head', tex: [0, 0, 8, 8, 8], box: [-4, -8, -4, 8, 8, 8], pivot: [0, 6, 0] },
+      { name: 'leg', tex: [0, 16, 4, 6, 4], box: [-2, 0, -2, 4, 6, 4], pivot: [-2, 18, -4], anim: 'legA' },
+      { name: 'leg', tex: [0, 16, 4, 6, 4], box: [-2, 0, -2, 4, 6, 4], pivot: [2, 18, -4], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 4, 6, 4], box: [-2, 0, -2, 4, 6, 4], pivot: [-2, 18, 4], anim: 'legB' },
+      { name: 'leg', tex: [0, 16, 4, 6, 4], box: [-2, 0, -2, 4, 6, 4], pivot: [2, 18, 4], anim: 'legA' }
+    ]
+  }
+};
+
+export const MOB_KEYS = Object.keys(MODEL);
+
+// ---------- 贴图 ----------
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -48,112 +155,165 @@ function loadImage(src) {
   });
 }
 
-// 把一个裁剪框里的像素贴到目标缓冲上，顺手把框里的透明洞补掉。
-//
-// 为什么必须补：立绘会被当成带 alphaTest 的贴图来画，透明像素等于被抠掉。
-// 骨架的胸腔本来就是「骨头之间留空」画的，直接铺上去的话胸口是一片窟窿，
-// 能透过身子看见后面的草地。补的办法是逐行取该行不透明像素的平均色 ——
-// 洞被填平了，但同一行里的横向明暗还在，所以看上去还是一副肋骨架。
-//
-// rect 的第五项为真时，先把这块贴图顺时针转 90° 再贴
-// （四足动物的身子在贴图里是竖着的长条，转过来才是横躺的）。
-function putPart(buf, ow, oh, px, rect, dx, dy) {
-  const rot = rect[4] ? 1 : 0;
-  const sw = rect[2], sh = rect[3];
-  const rw = rot ? sh : sw, rh = rot ? sw : sh;
-  const src = (x, y) => (rot ? px(rect[0] + y, rect[1] + sh - 1 - x) : px(rect[0] + x, rect[1] + y));
-
-  const part = new Array(rw * rh);
-  let ar = 0, ag = 0, ab = 0, an = 0;
-  for (let y = 0; y < rh; y++) {
-    for (let x = 0; x < rw; x++) {
-      const p = src(x, y);
-      part[y * rw + x] = p;
-      if (p[3] > 16) { ar += p[0]; ag += p[1]; ab += p[2]; an++; }
-    }
-  }
-  if (!an) return;
-  const whole = [Math.round(ar / an), Math.round(ag / an), Math.round(ab / an)];
-
-  for (let y = 0; y < rh; y++) {
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let x = 0; x < rw; x++) {
-      const p = part[y * rw + x];
-      if (p[3] > 16) { r += p[0]; g += p[1]; b += p[2]; n++; }
-    }
-    const fr = n ? Math.round(r / n) : whole[0];
-    const fg = n ? Math.round(g / n) : whole[1];
-    const fb = n ? Math.round(b / n) : whole[2];
-    for (let x = 0; x < rw; x++) {
-      if (part[y * rw + x][3] > 16) continue;
-      part[y * rw + x] = [fr, fg, fb, 255];
-    }
-  }
-
-  for (let y = 0; y < rh; y++) {
-    const gy = dy + y;
-    if (gy < 0 || gy >= oh) continue;
-    for (let x = 0; x < rw; x++) {
-      const gx = dx + x;
-      if (gx < 0 || gx >= ow) continue;
-      const p = part[y * rw + x];
-      const o = (gy * ow + gx) * 4;
-      buf[o] = p[0]; buf[o + 1] = p[1]; buf[o + 2] = p[2]; buf[o + 3] = 255;
-    }
-  }
-}
-
-export function compose(type, source) {
-  const p = PART[type];
-  const body = partSize(p.body);
-  const leg = partSize(p.leg);
-  const head = partSize(p.head);
-  const legW = leg.w;
-  const legTotal = legW * 2 + p.gap;
-  const bodyY = p.peek === 0 ? head.h : p.peek;
-  const legY = bodyY + body.h - 1 + (p.legGap || 0);
-  const w = Math.max(head.w, body.w, legTotal);
-  const h = legY + leg.h;
-
-  // 一次性把整张皮肤图读成像素数组，避免逐像素往画布上问
-  const sw = source.width, sh = source.height;
-  const tmp = document.createElement('canvas');
-  tmp.width = sw;
-  tmp.height = sh;
-  const tctx = tmp.getContext('2d');
-  tctx.imageSmoothingEnabled = false;
-  tctx.drawImage(source, 0, 0);
-  const data = tctx.getImageData(0, 0, sw, sh).data;
-  const px = (x, y) => {
-    const i = (y * sw + x) * 4;
-    return [data[i], data[i + 1], data[i + 2], data[i + 3]];
-  };
-
-  const buf = new Uint8ClampedArray(w * h * 4);
-  putPart(buf, w, h, px, p.body, ((w - body.w) / 2) | 0, bodyY);
-  const lx = ((w - legTotal) / 2) | 0;
-  putPart(buf, w, h, px, p.leg, lx, legY);
-  putPart(buf, w, h, px, p.leg, lx + legW + p.gap, legY);
-  putPart(buf, w, h, px, p.head, ((w - head.w) / 2) | 0, 0);
-
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  c.getContext('2d').putImageData(new ImageData(buf, w, h), 0, 0);
-  return c;
-}
-
+// 每只生物一张贴图。3D 模型直接从这张图上按面裁，不用再拼立绘了。
 export const mobArt = {};
 
 export async function buildMobArt() {
-  await Promise.all(TYPES.map(async (t) => {
+  await Promise.all(MOB_KEYS.map(async (t) => {
     const img = await loadImage('textures/entity/' + t + '.png');
-    const canvas = compose(t, img);
-    const tex = new THREE.CanvasTexture(canvas);
+    const tex = new THREE.Texture(img);
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
     tex.colorSpace = THREE.SRGBColorSpace;
-    mobArt[t] = { tex, ratio: canvas.width / canvas.height, h: canvas.height / 16 };
+    tex.needsUpdate = true;
+    mobArt[t] = { tex, texW: img.width, texH: img.height };
   }));
+}
+
+// ---------- 几何 ----------
+
+// 一个长方体的六个面。box 是相对轴心的 MC 方框 [x,y,z,w,h,d]，
+// tex 是这块在贴图上的展开原点与三条棱长 [u,v,w,h,d]，imgW/imgH 是贴图尺寸。
+export function buildCube(box, tex, imgW, imgH, mirror) {
+  const [bx, by, bz, w, h, d] = box;
+  const [u, v, tw, th, td] = tex;
+  const base = [bx, by, bz];
+  const size = [w, h, d];
+
+  const pos = [], uvs = [], col = [], idx = [];
+  // 每个面 4 个顶点、6 个索引，所以顶点基址不能拿 idx.length 当（差了 1.5 倍）
+  let vbase = 0;
+  for (const face of FACES) {
+    const [ru, rv, rw, rh] = face.rect(tw, th, td);
+    // 一个面上四个角：贴图坐标 (0,0) 是左上角，对应顺序 左上→右上→右下→左下
+    const corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    for (const [u01raw, v01] of corners) {
+      const u01 = mirror ? 1 - u01raw : u01raw;
+      const p = [0, 0, 0];
+      const fixed = FIXED[face.key];
+      p[fixed[0]] = fixed[1] ? base[fixed[0]] + size[fixed[0]] : base[fixed[0]];
+      p[face.uAxis] = base[face.uAxis] + (face.uSign > 0 ? u01 * size[face.uAxis] : (1 - u01) * size[face.uAxis]);
+      p[face.vAxis] = base[face.vAxis] + (face.vSign > 0 ? v01 * size[face.vAxis] : (1 - v01) * size[face.vAxis]);
+      pos.push(p[0], p[1], p[2]);
+      // 贴图 v 轴朝下、three 的 uv v 轴朝上，所以翻一下
+      uvs.push((u + ru + u01 * rw) / imgW, 1 - (v + rv + v01 * rh) / imgH);
+      col.push(face.bright, face.bright, face.bright);
+    }
+    idx.push(vbase, vbase + 1, vbase + 2, vbase, vbase + 2, vbase + 3);
+    vbase += 4;
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+// 每块轴心在模型空间里的绝对位置。挂在父块上的块（猪鼻子、牛角、鸡嘴）
+// 坐标是相对父块轴心写的，要顺着 parent 一层层加起来。
+function partOffsets(parts) {
+  const byName = {};
+  return parts.map((part) => {
+    const up = part.parent ? byName[part.parent] : null;
+    const off = up
+      ? [up[0] + part.pivot[0], up[1] + part.pivot[1], up[2] + part.pivot[2]]
+      : [part.pivot[0], part.pivot[1], part.pivot[2]];
+    byName[part.name] = off;
+    return off;
+  });
+}
+
+// 一块的方框在模型空间里的八个角（要算整只的包围盒用）
+function boxCorners(box, pivot, rotX) {
+  const [bx, by, bz, w, h, d] = box;
+  const out = [];
+  for (const i of [0, 1]) for (const j of [0, 1]) for (const k of [0, 1]) {
+    let p = [bx + i * w, by + j * h, bz + k * d];
+    if (rotX) {
+      const c = Math.cos(rotX), s = Math.sin(rotX);
+      p = [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c];
+    }
+    out.push([p[0] + pivot[0], p[1] + pivot[1], p[2] + pivot[2]]);
+  }
+  return out;
+}
+
+// 造一只生物的网格。返回一个 Group：
+//   group               —— 位置 / 朝向(yaw) / 游戏用的缩放，外面直接摆这个
+//   group.userData.base —— 内层负责「底座贴地 + 归一高度 + 翻转」的那层
+//   group.userData.parts—— 每个可动块的 Group，按 anim 名字索引
+export function buildMobMesh(type, def) {
+  const model = MODEL[type];
+  const art = mobArt[type];
+  if (!model || !art) return null;
+
+  // 先量出整只在模型空间里的包围盒，才能把底座挪到 y=0、把高度归一
+  const offs = partOffsets(model.parts);
+  let minY = Infinity, maxY = -Infinity;
+  model.parts.forEach((part, i) => {
+    for (const p of boxCorners(part.box, offs[i], part.rotX)) {
+      if (p[1] < minY) minY = p[1];
+      if (p[1] > maxY) maxY = p[1];
+    }
+  });
+  const span = maxY - minY;               // 模型空间里的总高（px）
+  const k = def.h / span;                 // 让它渲染出来正好是判定框那么高
+
+  const group = new THREE.Group();
+  const base = new THREE.Group();
+  base.scale.setScalar(k);
+  base.rotation.x = Math.PI;              // y 和 z 一起取反：翻成 y 朝上、正面朝 +z
+  base.position.y = maxY * k;             // 最低点落到 y=0
+  group.add(base);
+
+  const texMat = new THREE.MeshBasicMaterial({
+    map: art.tex,
+    transparent: true,
+    alphaTest: 0.5,
+    side: THREE.DoubleSide,
+    vertexColors: true
+  });
+  const solidMat = model.legColor === undefined ? null : new THREE.MeshBasicMaterial({
+    color: model.legColor,
+    transparent: true,
+    side: THREE.DoubleSide,
+    vertexColors: true
+  });
+  const mats = solidMat ? [texMat, solidMat] : [texMat];
+
+  const byName = {};
+  const byAnim = {};
+  const parts = [];
+  for (const part of model.parts) {
+    const pg = new THREE.Group();
+    pg.position.set(part.pivot[0], part.pivot[1], part.pivot[2]);
+    if (part.rotX) pg.rotation.x = part.rotX;
+    const geo = part.solid
+      ? buildCube(part.box, [0, 0, 1, 1, 1], 1, 1, false)
+      : buildCube(part.box, part.tex, art.texW, art.texH, part.mirror);
+    const pm = new THREE.Mesh(geo, part.solid ? solidMat : texMat);
+    pm.name = part.name;
+    pg.add(pm);
+    (part.parent ? byName[part.parent] : base).add(pg);
+    byName[part.name] = pg;
+    if (part.anim) {
+      if (!byAnim[part.anim]) byAnim[part.anim] = [];
+      byAnim[part.anim].push(pg);
+      // 摆腿的基准姿势是「竖直下垂」，记下来后面按相位加减
+      pg.userData.restX = part.rotX || 0;
+    }
+    parts.push({ name: part.name, anim: part.anim, group: pg });
+  }
+
+  group.userData.base = base;
+  group.userData.legs = byAnim.legA || [];
+  group.userData.legsB = byAnim.legB || [];
+  group.userData.arms = byAnim.armA || [];
+  group.userData.armsB = byAnim.armB || [];
+  group.userData.mats = mats;
+  group.userData.modelHeight = def.h;
+  return group;
 }
