@@ -19,7 +19,11 @@ for (let y = 0; y < HEIGHT; y++) {
 
 export function computeChunkLight(ch, getChunk) {
   const data = ch.data, sky = ch.skyLight, lit = ch.blockLight;
-  const isSkyOpen = (id) => id === AIR || (BLOCKS[id] && !BLOCKS[id].opaque);
+  // 树叶（cutout）算「能透光」，但要扣 1 级 —— 原版树叶的 lightOpacity 就是 1。
+  // 以前把树叶当全不透明处理，一片树冠底下天光直接归零，整座森林暗成一片。
+  // 不透明方块照旧一格都透不过去。
+  const cost = (id) => (BLOCKS[id] && BLOCKS[id].cutout) ? 1 : 0;
+  const open = (id) => id === AIR || (BLOCKS[id] && (!BLOCKS[id].opaque || BLOCKS[id].cutout));
 
   const skyNbr = [], litNbr = [];
   for (let j = -1; j <= 1; j++) {
@@ -47,10 +51,10 @@ export function computeChunkLight(ch, getChunk) {
     for (let x = 0; x < CHUNK; x++) {
       for (let z = 0; z < CHUNK; z++) {
         const i = x + CHUNK * (z + CHUNK * y);
-        if (!isSkyOpen(data[i])) continue;
+        if (!open(data[i])) continue;
         if (y === HEIGHT - 1) { sky[i] = 15; continue; }
         const above = i + CHUNK * CHUNK;
-        if (isSkyOpen(data[above]) && sky[above] === 15) sky[i] = 15;
+        if (open(data[above])) sky[i] = Math.max(0, sky[above] - cost(data[above]));
       }
     }
   }
@@ -61,14 +65,15 @@ export function computeChunkLight(ch, getChunk) {
       for (let x = 0; x < CHUNK; x++) {
         for (let z = 0; z < CHUNK; z++) {
           const i = x + CHUNK * (z + CHUNK * y);
-          if (!isSkyOpen(data[i])) continue;
+          if (!open(data[i])) continue;
+          const self = cost(data[i]);
           let best = sky[i];
           let v;
-          v = pick(skyNbr, x - 1, y, z) - 1; if (v > best) best = v;
-          v = pick(skyNbr, x + 1, y, z) - 1; if (v > best) best = v;
-          v = pick(skyNbr, x, y, z - 1) - 1; if (v > best) best = v;
-          v = pick(skyNbr, x, y, z + 1) - 1; if (v > best) best = v;
-          v = pick(skyNbr, x, y + 1, z) - 1; if (v > best) best = v;
+          v = pick(skyNbr, x - 1, y, z) - 1 - self; if (v > best) best = v;
+          v = pick(skyNbr, x + 1, y, z) - 1 - self; if (v > best) best = v;
+          v = pick(skyNbr, x, y, z - 1) - 1 - self; if (v > best) best = v;
+          v = pick(skyNbr, x, y, z + 1) - 1 - self; if (v > best) best = v;
+          v = pick(skyNbr, x, y + 1, z) - 1 - self; if (v > best) best = v;
           if (best > sky[i]) { sky[i] = best; touched = true; }
         }
       }
@@ -88,15 +93,16 @@ export function computeChunkLight(ch, getChunk) {
         for (let z = 0; z < CHUNK; z++) {
           const i = x + CHUNK * (z + CHUNK * y);
           const id = data[i];
-          if (id !== AIR && BLOCKS[id] && BLOCKS[id].opaque) continue;
+          if (!open(id)) continue;
+          const self = cost(id);
           let best = lit[i];
           let v;
-          v = pick(litNbr, x - 1, y, z) - 1; if (v > best) best = v;
-          v = pick(litNbr, x + 1, y, z) - 1; if (v > best) best = v;
-          v = pick(litNbr, x, y, z - 1) - 1; if (v > best) best = v;
-          v = pick(litNbr, x, y, z + 1) - 1; if (v > best) best = v;
-          v = pick(litNbr, x, y - 1, z) - 1; if (v > best) best = v;
-          v = pick(litNbr, x, y + 1, z) - 1; if (v > best) best = v;
+          v = pick(litNbr, x - 1, y, z) - 1 - self; if (v > best) best = v;
+          v = pick(litNbr, x + 1, y, z) - 1 - self; if (v > best) best = v;
+          v = pick(litNbr, x, y, z - 1) - 1 - self; if (v > best) best = v;
+          v = pick(litNbr, x, y, z + 1) - 1 - self; if (v > best) best = v;
+          v = pick(litNbr, x, y - 1, z) - 1 - self; if (v > best) best = v;
+          v = pick(litNbr, x, y + 1, z) - 1 - self; if (v > best) best = v;
           if (best > lit[i]) { lit[i] = best; touched = true; }
         }
       }

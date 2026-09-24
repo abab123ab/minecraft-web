@@ -106,7 +106,8 @@ const HELPERS = `
 `;
 
 console.log('\n===== 1. 根因证据：建面时读到的光，是实心方块自己的还是旁边空气的？ =====');
-const evidence = await ev(`(function(){
+const evidence = await ev(`(async function(){
+  const BLOCKS = (await import('/js/blocks.js')).BLOCKS;
   ${HELPERS}
   const w = window.game.world;
   const ch = w.ensureChunk(30, 30);
@@ -116,11 +117,15 @@ const evidence = await ev(`(function(){
   const idx = function(x, y, z){ return x + 16 * (z + 16 * y); };
 
   var solid = 0, solidSkyGt0 = 0, solidLitGt0 = 0;
+  var leaf = 0, leafSkyGt0 = 0;
   var air = 0, airSkyFull = 0, airLitGt0 = 0;
   for (var y = si * 16; y < si * 16 + 16; y++) {
     for (var z = 0; z < 16; z++) for (var x = 0; x < 16; x++) {
       var i = idx(x, y, z);
       if (data[i] === 0) { air++; if (sky[i] === 15) airSkyFull++; if (lit[i] > 0) airLitGt0++; }
+      else if (BLOCKS[data[i]] && BLOCKS[data[i]].cutout) {
+        leaf++; if (sky[i] > 0) leafSkyGt0++;
+      }
       else { solid++; if (sky[i] > 0) solidSkyGt0++; if (lit[i] > 0) solidLitGt0++; }
     }
   }
@@ -129,23 +134,29 @@ const evidence = await ev(`(function(){
   const aboveSky = sky[idx(8, Math.min(79, topY + 1), 8)];
   return {
     maxH, si,
-    实心块总数: solid, 实心块自身skyLight大于0: solidSkyGt0, 实心块自身blockLight大于0: solidLitGt0,
+    不透明块总数: solid, 不透明块自身skyLight大于0: solidSkyGt0, 不透明块自身blockLight大于0: solidLitGt0,
+    树叶块总数: leaf, 树叶块自身skyLight大于0: leafSkyGt0,
     空气块总数: air, 空气块skyLight等于15: airSkyFull, 空气块blockLight大于0: airLitGt0,
     地表块自身skyLight: selfSky, 地表上方空气skyLight: aboveSky,
     网格: stats(ch.secs[si].o)
   };
 })()`);
 console.log('    地表 y=' + evidence.maxH + ' 所在 section si=' + evidence.si);
-console.log('    实心块 ' + evidence.实心块总数 + ' 个：自身 skyLight>0 的有 ' + evidence.实心块自身skyLight大于0 +
-  ' 个，自身 blockLight>0 的有 ' + evidence.实心块自身blockLight大于0 + ' 个');
+console.log('    不透明块 ' + evidence.不透明块总数 + ' 个：自身 skyLight>0 的有 ' + evidence.不透明块自身skyLight大于0 +
+  ' 个，自身 blockLight>0 的有 ' + evidence.不透明块自身blockLight大于0 + ' 个');
+console.log('    树叶（透光块） ' + evidence.树叶块总数 + ' 个：自身 skyLight>0 的有 ' + evidence.树叶块自身skyLight大于0 + ' 个');
 console.log('    空气块 ' + evidence.空气块总数 + ' 个：skyLight=15 的有 ' + evidence.空气块skyLight等于15 +
   ' 个，blockLight>0 的有 ' + evidence.空气块blockLight大于0 + ' 个');
 console.log('    地表块 (8,' + evidence.maxH + ',8) 自身 skyLight = ' + evidence.地表块自身skyLight +
   ' ，其上方 (8,' + (evidence.maxH + 1) + ',8) 空气 skyLight = ' + evidence.地表上方空气skyLight);
 console.log('    网格顶点色：' + JSON.stringify(evidence.网格));
 
-check('实心方块自身的 skyLight 恒为 0（光照不会写进不透明方块内部）',
-  evidence.实心块自身skyLight大于0 === 0, { 实心块总数: evidence.实心块总数, skyLight大于0: evidence.实心块自身skyLight大于0 });
+check('不透明方块自身的 skyLight 恒为 0（光照不会写进不透明方块内部）',
+  evidence.不透明块总数 > 0 && evidence.不透明块自身skyLight大于0 === 0,
+  { 不透明块总数: evidence.不透明块总数, skyLight大于0: evidence.不透明块自身skyLight大于0 });
+check('树叶自身带着天光（树叶只挡 1 级，不再把树冠底下挡成 0）',
+  evidence.树叶块总数 > 0 && evidence.树叶块自身skyLight大于0 === evidence.树叶块总数,
+  { 树叶块总数: evidence.树叶块总数, skyLight大于0: evidence.树叶块自身skyLight大于0 });
 check('空气方块确实有 skyLight=15（光只存在于空气里）',
   evidence.空气块skyLight等于15 > 0, { 空气块总数: evidence.空气块总数, skyLight等于15: evidence.空气块skyLight等于15 });
 check('地表块自身 skyLight=0 但上方空气 skyLight=15（两个候选光源差异明确）',
