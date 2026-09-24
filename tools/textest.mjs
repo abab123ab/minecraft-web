@@ -243,138 +243,252 @@ check('四件皮甲染成了棕色（' + leatherDetail.join('  ') + '）', leath
 check('铁甲保持灰色', armor.iron_helmet && armor.iron_helmet[0] === armor.iron_helmet[1] && armor.iron_helmet[1] === armor.iron_helmet[2], JSON.stringify(armor.iron_helmet));
 check('金甲没被皮甲染色波及', armor.golden_helmet && armor.golden_helmet[1] > armor.golden_helmet[2], JSON.stringify(armor.golden_helmet));
 check('钻石甲没被皮甲染色波及', armor.diamond_helmet && armor.diamond_helmet[2] > armor.diamond_helmet[0], JSON.stringify(armor.diamond_helmet));
-
-// ---- C 生物立绘的裁剪框不能骑到贴图的透明缝上 ----
-const crops = await ev(`(async function(){
-  const { PART, compose, partSize } = await import('/js/mobtex.js');
-  const types = Object.keys(PART);
-  const rects = [];
-  const comps = [];
-  const fronts = [];
-  for (const t of types) {
+// ---- C 生物模型：立方体展开图取面 + 3D 盒子几何 ----
+//
+// 生物不是一张贴纸，是一堆长方体拼出来的。每个盒子 (u0,v0,w,h,d) 的六个面
+// 在皮肤图上按固定位置摊开：
+//   top    [u0+d,     v0,   w, d]      bottom [u0+d+w,   v0,   w, d]
+//   right  [u0,       v0+d, d, h]      front  [u0+d,     v0+d, w, h]
+//   left   [u0+d+w,   v0+d, d, h]      back   [u0+d+w+d, v0+d, w, h]
+// 断言分两层：
+//   贴图侧：每个盒子按上面这条规则算出来的六个面，必须都落在真正画了东西的面板上
+//           （「头取到侧脸」「身子取到顶面」这一类错误，靠这条抓住）；
+//   几何侧：buildCube 造出来的必须是一个闭合长方体 —— 24 顶点 / 36 索引 /
+//           没有退化三角形 / 每个三角形都垂直于某条轴 / 表面积等于 2(wh+hd+dw)。
+// 几何侧是给「拿索引个数当顶点基址」那个 bug 兜底的：从第二个面开始整体错位，
+// 盒子看上去像漏了一面，但顶点坐标本身还是对的，光量顶点和包围盒都抓不住。
+const model = await ev(`(async function(){
+  const { MODEL, buildCube } = await import('/js/mobtex.js');
+  const FACE = [
+    ['top',    (w, h, d) => [d, 0, w, d]],
+    ['bottom', (w, h, d) => [d + w, 0, w, d]],
+    ['right',  (w, h, d) => [0, d, d, h]],
+    ['front',  (w, h, d) => [d, d, w, h]],
+    ['left',   (w, h, d) => [d + w, d, d, h]],
+    ['back',   (w, h, d) => [d + w + d, d, w, h]]
+  ];
+  const imgs = {};
+  for (const t of Object.keys(MODEL)) {
     const img = new Image();
     await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'textures/entity/' + t + '.png'; });
     const c = document.createElement('canvas');
     c.width = img.width; c.height = img.height;
     const cx = c.getContext('2d');
     cx.drawImage(img, 0, 0);
-    const d = cx.getImageData(0, 0, c.width, c.height).data;
-    const SW = c.width;
-    const px = (x, y) => { const i = (y * SW + x) * 4; return [d[i], d[i+1], d[i+2], d[i+3]]; };
-    const p = PART[t];
-
-    // 头的裁剪框必须是「立方体展开图」里的正面。
-    //
-    // 这七张图是 MC 的皮肤图：某个盒子 (u0,v0,w,h,d) 的六个面按固定位置摊开，
-    // 正面精确落在 (u0+d, v0+d, w, h)。所以反查一遍 —— 如果存在一个盒子，
-    // 它的六个面都有像素、且展开包围盒里那两个不属于任何面的 d x d 角是透明的，
-    // 那么这个框就是一块真实存在的正面的位置。
-    //
-    // 为什么光查「框里有像素」不够：侧脸那一块同样有像素。当初牛头写的是
-    // [8,8,8,6]，右眼加半个侧脸全在里面，看上去一切正常，实际脸是歪的。
-    // 这条规则恰好否掉它，放行 7 个正确的头。
-    const opaqueBox = (x, y, w, h) => {
-      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (px(x + i, y + j)[3] <= 16) return false;
-      return true;
-    };
-    const clearBox = (x, y, w, h) => {
-      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (px(x + i, y + j)[3] > 16) return false;
-      return true;
-    };
-    const head = p.head;
-    let front = 0;
-    for (let d = 1; d <= 10 && !front; d++) {
-      const u0 = head[0] - d, v0 = head[1] - d, w = head[2], h = head[3];
-      if (u0 < 0 || v0 < 0) continue;
-      const six = [
-        [u0 + d, v0, w, d], [u0 + d + w, v0, w, d],
-        [u0, v0 + d, d, h], [head[0], head[1], w, h],
-        [u0 + d + w, v0 + d, d, h], [u0 + d + w + d, v0 + d, w, h]
-      ];
-      if (six.some((f) => f[0] < 0 || f[1] < 0 || f[0] + f[2] > c.width || f[1] + f[3] > c.height)) continue;
-      if (!six.every((f) => opaqueBox(f[0], f[1], f[2], f[3]))) continue;
-      if (!clearBox(u0, v0, d, d)) continue;
-      if (!clearBox(u0 + d + 2 * w, v0, d, d)) continue;
-      front = d;
-    }
-    fronts.push({ t, r: head, front });
-
-    for (const name of ['head', 'body', 'leg']) {
-      const r = p[name];
-      // 扫的是「裁剪框在源图里覆盖的那块面积」。带 rot 的框只是把这同一批
-      // 源像素转个方向再贴，覆盖的像素集合没变，所以这里按 r[2] x r[3] 扫是对的。
-      let n = 0, tot = 0;
-      for (let y = 0; y < r[3]; y++) for (let x = 0; x < r[2]; x++) { tot++; if (px(r[0] + x, r[1] + y)[3] > 16) n++; }
-      rects.push({ t, name, r, pct: n / tot * 100 });
-    }
-
-    // 部件区（头 / 身子 / 两条腿的粘贴位置）里不能有透明像素，
-    // 否则 alphaTest 会把它们抠掉，看起来就是身上有洞。
-    const canvas = compose(t, img);
-    const cc = canvas.getContext('2d');
-    const cd = cc.getImageData(0, 0, canvas.width, canvas.height).data;
-    const W = canvas.width, H = canvas.height;
-    const legW = partSize(p.leg).w;
-    const legTotal = legW * 2 + p.gap;
-    const bodyY = p.peek === 0 ? partSize(p.head).h : p.peek;
-    const legY = bodyY + partSize(p.body).h - 1 + (p.legGap || 0);
-    const lx = ((W - legTotal) / 2) | 0;
-    // 粘贴位置要按「转完之后的尺寸」算，跟 compose() 里的排布逐项对齐。
-    const boxes = [
-      [((W - partSize(p.body).w) / 2) | 0, bodyY, partSize(p.body).w, partSize(p.body).h],
-      [((W - partSize(p.head).w) / 2) | 0, 0, partSize(p.head).w, partSize(p.head).h],
-      [lx, legY, legW, partSize(p.leg).h],
-      [lx + legW + p.gap, legY, legW, partSize(p.leg).h]
-    ];
-    let holes = 0, area = 0, trans = 0;
-    for (const b of boxes) {
-      for (let y = b[1]; y < b[1] + b[3]; y++) {
-        for (let x = b[0]; x < b[0] + b[2]; x++) {
-          if (x < 0 || y < 0 || x >= W || y >= H) continue;
-          area++;
-          if (cd[(y * W + x) * 4 + 3] <= 16) holes++;
-        }
-      }
-    }
-    for (let i = 3; i < cd.length; i += 4) if (cd[i] <= 16) trans++;
-    comps.push({ t, w: W, h: H, holes, area, trans });
+    imgs[t] = { w: c.width, h: c.height, d: cx.getImageData(0, 0, c.width, c.height).data };
   }
-  return { rects, comps, fronts };
+  const px = (t, x, y) => {
+    const im = imgs[t];
+    if (x < 0 || y < 0 || x >= im.w || y >= im.h) return [0, 0, 0, 0];
+    const i = (y * im.w + x) * 4;
+    return [im.d[i], im.d[i + 1], im.d[i + 2], im.d[i + 3]];
+  };
+  const fill = (t, r) => {
+    let n = 0, tot = 0;
+    for (let j = 0; j < r[3]; j++) for (let i = 0; i < r[2]; i++) { tot++; if (px(t, r[0] + i, r[1] + j)[3] > 16) n++; }
+    return tot ? n / tot : 0;
+  };
+
+  const parts = [];
+  const geoms = [];
+  for (const t of Object.keys(MODEL)) {
+    for (const part of MODEL[t].parts) {
+      const tex = part.tex || [0, 0, 1, 1, 1];
+      const [u, v, tw, th, td] = tex;
+      const solid = !!part.solid;
+      let facesOk = 0, frontFill = 1, outOfBounds = 0;
+      const rects = [];
+      for (const [name, rectOf] of FACE) {
+        const r = rectOf(tw, th, td);
+        const rect = [u + r[0], v + r[1], r[2], r[3]];
+        const f = solid ? 1 : fill(t, rect);
+        rects.push({ name, rect, f: +f.toFixed(3) });
+        if (f >= 0.95) facesOk++;
+        if (name === 'front') frontFill = f;
+        if (rect[0] < 0 || rect[1] < 0 || rect[0] + rect[2] > imgs[t].w || rect[1] + rect[3] > imgs[t].h) outOfBounds++;
+      }
+      parts.push({ t, name: part.name, solid, tex: part.tex || null, facesOk, frontFill, outOfBounds, rects });
+
+      const [bx, by, bz, w, h, d] = part.box;
+      const imgW = solid ? 1 : imgs[t].w;
+      const imgH = solid ? 1 : imgs[t].h;
+      const g = buildCube(part.box, solid ? [0, 0, 1, 1, 1] : part.tex, imgW, imgH, !!part.mirror);
+      const pos = g.getAttribute('position').array;
+      const uvs = g.getAttribute('uv').array;
+      const idx = g.getIndex().array;
+      const verts = [];
+      for (let i = 0; i < pos.length; i += 3) verts.push([pos[i], pos[i + 1], pos[i + 2]]);
+      const corners = [];
+      for (const i of [0, 1]) for (const j of [0, 1]) for (const k of [0, 1]) corners.push([bx + i * w, by + j * h, bz + k * d]);
+      const near = (a, b) => Math.abs(a - b) < 1e-4;
+      let offCorner = 0;
+      for (const p of verts) {
+        if (!corners.some((c) => near(c[0], p[0]) && near(c[1], p[1]) && near(c[2], p[2]))) offCorner++;
+      }
+      let degen = 0, notAxis = 0, area = 0;
+      for (let i = 0; i < idx.length; i += 3) {
+        const a = verts[idx[i]], b = verts[idx[i + 1]], c = verts[idx[i + 2]];
+        const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        const cr = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        const ar = Math.hypot(cr[0], cr[1], cr[2]) / 2;
+        if (ar < 1e-6) degen++;
+        area += ar;
+        // 长方体一个面的三个顶点，必定在某个轴的同一个坐标上
+        const axis = (near(a[0], b[0]) && near(a[0], c[0]))
+          || (near(a[1], b[1]) && near(a[1], c[1]))
+          || (near(a[2], b[2]) && near(a[2], c[2]));
+        if (!axis) notAxis++;
+      }
+      let uvOut = 0;
+      for (let i = 0; i < uvs.length; i++) if (uvs[i] < -1e-6 || uvs[i] > 1 + 1e-6) uvOut++;
+      geoms.push({
+        t, name: part.name, solid,
+        vtx: pos.length / 3, tri: idx.length / 3,
+        maxIdx: idx.length ? Math.max.apply(null, Array.from(idx)) : -1,
+        offCorner, degen, notAxis, uvOut,
+        area: +area.toFixed(4), areaWant: +(2 * (w * h + h * d + d * w)).toFixed(4)
+      });
+    }
+  }
+  return { parts, geoms };
 })()`);
 
-// 骨架的胸腔是贴图本身画成「骨头之间留空」的，所以它的身子框允许有洞，
-// 靠 compose() 逐行补色填平。其余 20 个框必须整个落在真实面板里。
-const GROUNDED = ['skeleton|body'];
-const badRects = crops.rects.filter((r) => r.pct < 100 && !GROUNDED.includes(r.t + '|' + r.name));
-check('除骨架身子外，裁剪框全部 100% 落在真实面板里（不合格 ' + badRects.length + ' 个）',
-  badRects.length === 0,
-  badRects.map((r) => r.t + ' ' + r.name + ' ' + JSON.stringify(r.r) + ' ' + r.pct.toFixed(1) + '%').join(' | '));
+// 有两块贴图原版就有意留白，不算缺陷：
+//   skeleton|body  胸腔本来就是画成「骨头之间透空」的
+//   猪鼻子 / 牛乳房 是 1 像素厚的薄片，背面那张面板原版没画
+const HOLEY = ['skeleton|body', 'pig|snout', 'cow|udder'];
+const partKey = (p) => p.t + '|' + p.name;
+const badFaces = model.parts.filter((p) => !p.solid && !HOLEY.includes(partKey(p)) && p.facesOk < 5);
+check('除原版留白外，每个盒子的六个面都落在真实面板上（不合格 ' + badFaces.length + ' 个）',
+  badFaces.length === 0,
+  badFaces.map((p) => partKey(p) + ' ' + p.facesOk + '/6 ' + JSON.stringify(p.rects.map((r) => r.name + '=' + r.f))).join(' | '));
 
-const skel = crops.rects.find((r) => r.t === 'skeleton' && r.name === 'body');
-check('骨架身子框确实是有洞的那种面板（' + (skel ? skel.pct.toFixed(1) : '?') + '%，靠补色填平）',
-  !!skel && skel.pct < 100, skel ? skel.pct.toFixed(1) + '%' : '没有这个框');
+const hollow = model.parts.filter((p) => !p.solid && !HOLEY.includes(partKey(p)) && p.frontFill < 0.95);
+check('每个盒子的正面都有画东西（不合格 ' + hollow.length + ' 个）',
+  hollow.length === 0,
+  hollow.map((p) => partKey(p) + ' ' + p.frontFill.toFixed(2)).join(' | '));
 
-// 头的裁剪框必须是立方体展开图里的正面。这是「生物的脸是歪的」那个 bug 的
-// 回归网 —— 光靠上面那条「框里有像素」是抓不住的，侧脸那块同样有像素。
-const badFaces = crops.fronts.filter((f) => !f.front);
-check('七张脸都取自立方体展开图的正面（不合格 ' + badFaces.length + ' 个）',
-  crops.fronts.length === 7 && badFaces.length === 0,
-  badFaces.map((f) => f.t + ' ' + JSON.stringify(f.r)).join(' | '));
+const oob = model.parts.filter((p) => p.outOfBounds);
+check('每个盒子取贴图都没越界（越界 ' + oob.length + ' 个）', oob.length === 0,
+  oob.map(partKey).join(' | '));
 
-const badComps = crops.comps.filter((c) => c.holes !== 0);
-check('七张立绘的部件区都没有透明像素（破洞）',
-  crops.comps.length === 7 && badComps.length === 0,
-  badComps.map((c) => c.t + ' 洞' + c.holes + '/' + c.area).join(' | '));
+const vtxBad = model.geoms.filter((g) => g.vtx !== 24 || g.tri !== 12 || g.maxIdx !== 23);
+const idxBad = model.geoms.filter((g) => g.maxIdx >= g.vtx);
+check('每个盒子都是 24 个顶点、12 个三角形、索引不越界（不合格 ' + (vtxBad.length + idxBad.length) + ' 个）',
+  vtxBad.length === 0 && idxBad.length === 0,
+  vtxBad.concat(idxBad).map((g) => g.t + '|' + g.name + ' ' + g.vtx + 'v ' + g.tri + 't max' + g.maxIdx).join(' | '));
 
-const creeperSkel = crops.comps.find((c) => c.t === 'skeleton');
-check('骨架的胸口补上了（不再能透过身子看见背景）',
-  !!creeperSkel && creeperSkel.holes === 0, creeperSkel ? String(creeperSkel.holes) : '?');
+const offc = model.geoms.filter((g) => g.offCorner > 0);
+check('每个顶点都落在盒子的八个角上（跑偏 ' + offc.length + ' 个盒）', offc.length === 0,
+  offc.map((g) => g.t + '|' + g.name + ' ' + g.offCorner + 'v').join(' | '));
 
-// 立绘整体还得是「有轮廓的立绘」：补洞只补部件区内部的洞，
-// 部件区之外（比如两条腿之间）必须还是透明的，不能被填成一整块色块。
-const shaped = crops.comps.filter((c) => c.trans > 0);
-check('七张立绘都还有透明轮廓（补洞没有把整张图填成方块）',
-  shaped.length === 7, JSON.stringify(crops.comps.map((c) => c.t + ': 透明' + c.trans + '/' + (c.w * c.h))));
+const degen = model.geoms.filter((g) => g.degen > 0);
+check('没有退化三角形（面积为 0）', degen.length === 0,
+  degen.map((g) => g.t + '|' + g.name + ' ' + g.degen + '个').join(' | '));
+
+// 这条是「索引串了面」的回归网：错位之后会出现跨两个面的三角形，
+// 它的三个顶点不在任何一个轴的同一个坐标上。
+const notAxis = model.geoms.filter((g) => g.notAxis > 0);
+check('每个三角形都垂直于某条轴（面没有串到一起）（串了 ' + notAxis.length + ' 个盒）',
+  notAxis.length === 0,
+  notAxis.map((g) => g.t + '|' + g.name + ' ' + g.notAxis + '/' + g.tri).join(' | '));
+
+const areaBad = model.geoms.filter((g) => Math.abs(g.area - g.areaWant) > 0.01);
+check('每个盒子的表面积等于 2(wh+hd+dw)（不合格 ' + areaBad.length + ' 个）', areaBad.length === 0,
+  areaBad.map((g) => g.t + '|' + g.name + ' ' + g.area + ' vs ' + g.areaWant).join(' | '));
+
+// 鸡腿是没有贴图的纯色块，它的 uv 是拿一张 1x1 假图算的，不参与这条检查
+const uvBad = model.geoms.filter((g) => !g.solid && g.uvOut > 0);
+check('所有 uv 都落在 0..1 里（跑出去 ' + uvBad.length + ' 个盒）', uvBad.length === 0,
+  uvBad.map((g) => g.t + '|' + g.name + ' ' + g.uvOut + '个').join(' | '));
+
+check('七只生物一共 ' + model.parts.length + ' 个盒子全部通过几何检查',
+  model.parts.length === 48,
+  '盒子数 ' + model.parts.length);
+
+// 模型高度必须正好等于判定框高度、而且脚踩在 y=0 上 —— 否则贴图再对，
+// 生物也是悬空或者穿地的。顺带量一下每块在 y 上的范围，能一眼看出谁没接上。
+const built = await ev(`(async function(){
+  const THREE = await import('/js/vendor/three.module.js');
+  const { buildMobMesh, MODEL, buildMobArt, mobArt } = await import('/js/mobtex.js');
+  const { MOB_TYPES } = await import('/js/mobs.js');
+  if (!mobArt.pig) await buildMobArt();
+  const out = [];
+  for (const t of Object.keys(MODEL)) {
+    const def = MOB_TYPES[t];
+    const mesh = buildMobMesh(t, def);
+    if (!mesh) { out.push({ t, error: 'buildMobMesh 返回 null' }); continue; }
+    const bb = new THREE.Box3().setFromObject(mesh);
+    const rows = [];
+    mesh.traverse((o) => {
+      if (!o.isMesh) return;
+      const b = new THREE.Box3().setFromObject(o);
+      rows.push({ name: o.name, lo: +b.min.y.toFixed(3), hi: +b.max.y.toFixed(3) });
+    });
+    out.push({
+      t, def: { w: def.w, h: def.h },
+      y: +(bb.max.y - bb.min.y).toFixed(3),
+      minY: +bb.min.y.toFixed(4),
+      x: +(bb.max.x - bb.min.x).toFixed(3),
+      z: +(bb.max.z - bb.min.z).toFixed(3),
+      rows,
+      meshes: rows.length,
+      mats: mesh.userData.mats.length,
+      legsA: mesh.userData.legs.length, legsB: mesh.userData.legsB.length,
+      armsA: mesh.userData.arms.length, armsB: mesh.userData.armsB.length
+    });
+  }
+  return out;
+})()`);
+
+const tallBad = built.filter((m) => !m.error && Math.abs(m.y - m.def.h) > 0.005);
+check('七只渲染高度都等于判定框高度（差太多的 ' + tallBad.length + ' 只）', tallBad.length === 0,
+  tallBad.map((m) => m.t + ' ' + m.y + ' vs ' + m.def.h).join(' | '));
+
+const floatBad = built.filter((m) => !m.error && Math.abs(m.minY) > 0.005);
+check('七只的脚都踩在 y=0 上（悬空/穿地 ' + floatBad.length + ' 只）', floatBad.length === 0,
+  floatBad.map((m) => m.t + ' ' + m.minY).join(' | '));
+
+const errBad = built.filter((m) => m.error);
+check('七只都能造出网格', built.length === 7 && errBad.length === 0, JSON.stringify(built.map((m) => m.t)));
+
+const meshBad = built.filter((m) => !m.error && m.meshes !== model.parts.filter((p) => p.t === m.t).length);
+check('每只的网格块数等于 MODEL 表里的盒子数（对不上 ' + meshBad.length + ' 只）', meshBad.length === 0,
+  meshBad.map((m) => m.t + ' ' + m.meshes).join(' | '));
+
+// 每块的底边不能悬在半空：所有「腿」都必须落到 y=0 附近，
+// 而头/身子必须在腿上面。这条是「身子写成了竖条/腿装反了」的兜底。
+const legBad = [];
+for (const m of built) {
+  if (m.error) continue;
+  const legs = m.rows.filter((r) => r.name === 'leg');
+  for (const l of legs) if (Math.abs(l.lo) > 0.005) legBad.push(m.t + '|leg lo=' + l.lo);
+  const head = m.rows.find((r) => r.name === 'head');
+  if (head && head.lo <= 0.005) legBad.push(m.t + '|head 贴地了 lo=' + head.lo);
+}
+check('每条腿都落到地面、头不贴地（异常 ' + legBad.length + ' 条）', legBad.length === 0, legBad.join(' | '));
+
+// 鸡腿是没有贴图的纯色块（chicken.png 那块腿是透空的），材质得是两份
+const chicken = built.find((m) => m.t === 'chicken');
+check('鸡腿走纯色材质（鸡有两种材质）', !!chicken && chicken.mats === 2, chicken ? String(chicken.mats) : '?');
+const others = built.filter((m) => !m.error && m.t !== 'chicken' && m.mats !== 1);
+check('其余六只都只用一份贴图材质', others.length === 0, others.map((m) => m.t + ' ' + m.mats).join(' | '));
+
+const quad = built.filter((m) => ['pig', 'cow', 'sheep', 'creeper'].includes(m.t));
+const quadBad = quad.filter((m) => m.legsA !== 2 || m.legsB !== 2);
+check('四足生物是四条腿、按对角线分成两组反相（不合格 ' + quadBad.length + ' 只）', quadBad.length === 0,
+  quadBad.map((m) => m.t + ' ' + m.legsA + '/' + m.legsB).join(' | '));
+
+const biped = built.filter((m) => ['zombie', 'skeleton'].includes(m.t));
+const bipedBad = biped.filter((m) => m.legsA !== 1 || m.legsB !== 1 || m.armsA !== 1 || m.armsB !== 1);
+check('人形是一对腿加一对胳膊（不合格 ' + bipedBad.length + ' 只）', bipedBad.length === 0,
+  bipedBad.map((m) => m.t).join(' | '));
+
+const walkable = built.filter((m) => ['pig', 'cow', 'sheep'].includes(m.t));
+const deepBad = walkable.filter((m) => m.z / m.y < 0.8);
+check('四足动物身子是横躺的（长比高 ' + walkable.map((m) => m.t + '=' + (m.z / m.y).toFixed(2)).join(' ') + '）',
+  deepBad.length === 0, deepBad.map((m) => m.t + ' ' + (m.z / m.y).toFixed(2)).join(' | '));
 
 // ---- D 单帧渲染不能报错 ----
 const renderErr = await ev(`(function(){
