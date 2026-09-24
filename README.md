@@ -96,7 +96,7 @@ js/
   crafting.js         合成与熔炼配方
   inventory.js        背包数据、堆叠、耐久
   player.js           玩家物理、碰撞、相机
-  mobs.js             生物 AI、寻路、渲染
+  mobs.js             生物 AI、寻路、动作与朝向
   entities.js         掉落物实体
   survival.js         血量 / 饥饿 / 护甲
   furnace.js          熔炉逻辑
@@ -107,7 +107,7 @@ js/
   noise.js            噪声
   hud.js / hudview.js HUD 渲染
   textures.js         贴图图集
-  mobtex.js           生物贴图合成
+  mobtex.js           生物模型（盒子表 + 立方体展开图取面）
   worlddef.js         世界常量
   vendor/three.module.js   Three.js（本地内置）
 textures/             124 张贴图
@@ -121,7 +121,7 @@ node serve.mjs &          # 浏览器套件要它
 node tools/runall.mjs
 ```
 
-13 个套件、419 条断言，全绿约 90 秒：
+14 个套件、477 条断言，全绿约 96 秒：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -129,14 +129,15 @@ node tools/runall.mjs
 | `oredist` | 矿石层位分布与基岩层（纯 Node，1 秒） |
 | `minebrowser` | 挖掘端到端：真实事件驱动的挖/放/右键长按/准星选中框（28 条） |
 | `lighttest` / `lightprop` / `meshlighttest` | 光照计算 / 传播 / 渲染 |
-| `mobtest` / `mobopttest` | 生物行为回归与性能优化 |
+| `mobtest` / `mobopttest` | 生物行为与模型回归、性能优化（58 + 13 条） |
+| `textest` | 贴图与颜色：sRGB 管线、皮甲染色、生物盒子几何（36 条） |
 | `orechaintest` | 连锁挖矿、砍树、掉落合并、耐久按格数扣 |
 | `invtest` | 背包与合成交互（86 条） |
 | `layouttest` | HUD 布局 |
 | `bedtest` | 床与睡觉 |
 | `soundtest` | 音效调用 |
 
-**没有用任何测试框架**。纯 Node 脚本自己断言、自己打总表，浏览器套件用 CDP 连无头 Chrome（SwiftShader 软件渲染）跑真事件。`tools/` 里其余文件（`mobview`、`lightshot`、`uvcheck`、`cowmap` 等）是一次性诊断工具，不带断言、不参与基线。
+**没有用任何测试框架**。纯 Node 脚本自己断言、自己打总表，浏览器套件用 CDP 连无头 Chrome（SwiftShader 软件渲染）跑真事件。`tools/` 里其余文件（`lightshot`、`cowmap`、`texmap`、`mobview`、`heroshot` 等）是诊断 / 出图工具，不带断言、不参与基线 —— `mobview` 是生物 3D 转台相机，可以逐只、逐块、多机位拍 PNG 核对模型；`heroshot` 出 README 那张封面，固定机位 + 固定一群生物，可复跑。
 
 ```bash
 node tools/invtest.mjs        # 单独跑某一个
@@ -149,12 +150,14 @@ node tools/invtest.mjs        # 单独跑某一个
 - **光照分两个通道**。天光和方块光各自用 6 邻居 BFS 传播，渲染时取 max。这样火把在地下才有意义。
 - **交互逻辑尽量抽成方法**。主循环里的东西天生难测，所以"吸掉落物""算连锁范围""算挖掘耗时"都抽成了独立方法，测试可以一次调用就给出确定结论，而不是"等 300 毫秒看它响了几声"。
 - **贴图全部离线预生成**。图集在加载时一次性拼好，运行时不碰网络。
+- **生物是照原版模型数据拼的长方体**。`mobtex.js` 里存的是从原版 `ModelQuadruped` / `ModelChicken` / `ModelBiped` 抄下来的盒子表（轴心 `setRotationPoint`、六个面的 UV 都按原版立方体展开图算），运行时拼成一组 mesh 挂在轴心 `Group` 上，迈步就是绕轴心转。引擎没有实体光照，所以六个面的明暗是用顶点色写死的固定亮度（顶 1.0 / 前后 0.92 / 左右 0.78 / 底 0.62）乘上去。
 
 ## 已知限制
 
 - 单机。没有多人、没有服务端。
 - 没有红石、附魔、酿造、村民、下界。
 - 生物只有 7 种。
+- 羊只用了 `sheep.png`。原版羊是「一层羊毛模型 + 一层本体」，羊毛那层用的是单独的 `sheep_wool.png`（按染料染色）；这里没叠，所以羊看着是米白底带棕点，不像原版那样是一整身白羊毛。
 - 没有配方书，配方得自己记（或者翻 `js/crafting.js`）。
 - 山地群系在地图上占比很低，绿宝石不好找。
 - 网格构建在 CPU 上做，渲染距离拉到 8 会明显吃性能。
