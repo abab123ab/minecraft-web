@@ -157,11 +157,24 @@ class Game {
     uv.needsUpdate = true;
   }
 
+  // 挖掘相关的叠层（裂纹 + 进度条）收起来。方块选中框不归这里管 ——
+  // 它由 updateTarget 每帧算，原版是一直显示的，打生物不该顺手把它抹掉。
   hideMineOverlay() {
-    this.highlight.visible = false;
     this.crackMesh.visible = false;
     this.mineBar.style.display = 'none';
     this.mineState = null;
+  }
+
+  // 准星指着哪个方块，就给哪个方块画黑框。原版是一直显示的（站着不动也看得见），
+  // 不是只有按住左键挖的那一刻才显示 —— 那样根本没法瞄。
+  updateTarget(canAct) {
+    if (!canAct) {
+      this.highlight.visible = false;
+      return;
+    }
+    const hit = this.hitTest();
+    this.highlight.visible = !!hit;
+    if (hit) this.highlight.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
   }
 
   giveStartKit() {
@@ -726,14 +739,13 @@ class Game {
       this.hideMineOverlay();
       return;
     }
+    // 自己算一遍命中，不依赖 updateTarget 先跑过 —— 单独调用也要能挖
     const hit = this.hitTest();
     if (!hit) {
       this.hideMineOverlay();
       return;
     }
-    this.highlight.visible = true;
-    this.highlight.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
-    this.crackMesh.position.copy(this.highlight.position);
+    this.crackMesh.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
 
     const block = BLOCKS[hit.id];
     if (block.unbreakable) {
@@ -814,6 +826,7 @@ class Game {
       if (this.survival.health < this.lastHealth - 0.01 && !this.survival.dead) this.sfx.hurt();
       this.lastHealth = this.survival.health;
       if (canAct) this.updateMobs(dt);
+      this.updateTarget(canAct);
       const attacked = canAct ? this.updateAttack(dt) : false;
       if (attacked) this.hideMineOverlay();
       else this.updateMining(canAct ? dt : 0);

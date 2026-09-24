@@ -258,6 +258,54 @@ const holdRight = await ev(`(async function(){
 check('按住右键会连续放置（800ms 内 >= 3 次）', holdRight.during >= 3, JSON.stringify(holdRight));
 check('松开右键立刻停手', holdRight.afterRelease === holdRight.during, JSON.stringify(holdRight));
 
+// ---- H 准星选中框：站着不挖也要显示 ----
+// 原来 highlight.visible = true 只写在 updateMining 里，而 updateMining 一进来就
+// 「没按左键就 return」，结果整个游戏只有按住左键那一刻才看得见方块轮廓。
+const targetBox = await ev(`(async function(){
+  const g = window.game;
+  const B = (await import('/js/blocks.js')).BLOCK_BY_KEY;
+  const p = g.player.pos;
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z) - 3;
+  g.world.setBlock(bx, by, bz, B.stone.id);
+  const eye = g.player.eyePos();
+  const dx = bx + 0.5 - eye.x, dy = by + 0.5 - eye.y, dz = bz + 0.5 - eye.z;
+  g.player.yaw = Math.atan2(-dx, -dz);
+  g.player.targetYaw = g.player.yaw;
+  g.player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  g.player.targetPitch = g.player.pitch;
+  g.ui.close();
+  g.mining = false;
+
+  g.updateTarget(true);
+  const hit = g.hitTest();
+  const idle = { visible: g.highlight.visible,
+                 pos: [g.highlight.position.x, g.highlight.position.y, g.highlight.position.z] };
+  // 「不能操作」时（界面开着 / 死了 / 睡觉）要收起来
+  g.updateTarget(false);
+  const gated = g.highlight.visible;
+  g.updateTarget(true);
+  const back = g.highlight.visible;
+  // 打生物那条分支会调 hideMineOverlay，不能顺手把选中框抹掉
+  g.hideMineOverlay();
+  const afterHideOverlay = g.highlight.visible;
+  // 单独调 updateMining（测试/老调用方）也要能挖
+  g.mineState = null;
+  let f = 0;
+  g.mining = true;
+  for (; f < 3000; f++) { g.updateMining(0.016); if (g.world.getBlock(bx, by, bz) === 0) break; }
+  g.mining = false;
+  g.mineState = null;
+  g.world.setBlock(bx, by, bz, 0);
+  return { idle, gated, back, afterHideOverlay, hit: hit ? [hit.x, hit.y, hit.z] : null, broke: f, expect: [bx, by, bz] };
+})()`);
+check('站着不按左键：准星选中框也显示', targetBox.idle.visible === true, JSON.stringify(targetBox.idle));
+check('选中框位置 = 准星命中的方块中心',
+  targetBox.hit && JSON.stringify(targetBox.idle.pos) === JSON.stringify(targetBox.hit.map((v) => v + 0.5)),
+  JSON.stringify(targetBox));
+check('界面开着时收起选中框', targetBox.gated === false && targetBox.back === true, JSON.stringify(targetBox));
+check('hideMineOverlay 不再抹掉选中框', targetBox.afterHideOverlay === true, JSON.stringify(targetBox));
+check('单独调 updateMining 仍能挖穿方块', targetBox.broke > 0 && targetBox.broke < 3000, 'f=' + targetBox.broke);
+
 console.log('\n================ 挖掘/掉落验证 ================');
 let pass = 0;
 for (const r of results) {
