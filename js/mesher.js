@@ -6,27 +6,27 @@ import { B } from './worldgen.js';
 
 const FACES = [
   {
-    dir: [1, 0, 0], tile: 1, shade: 0.72, uAxis: [0, 0, -1], vAxis: [0, 1, 0],
+    key: 'px', dir: [1, 0, 0], tile: 1, shade: 0.72, uAxis: [0, 0, -1], vAxis: [0, 1, 0],
     verts: [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   },
   {
-    dir: [-1, 0, 0], tile: 1, shade: 0.72, uAxis: [0, 0, 1], vAxis: [0, 1, 0],
+    key: 'nx', dir: [-1, 0, 0], tile: 1, shade: 0.72, uAxis: [0, 0, 1], vAxis: [0, 1, 0],
     verts: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   },
   {
-    dir: [0, 1, 0], tile: 0, shade: 1.0, uAxis: [1, 0, 0], vAxis: [0, 0, -1],
+    key: 'py', dir: [0, 1, 0], tile: 0, shade: 1.0, uAxis: [1, 0, 0], vAxis: [0, 0, -1],
     verts: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   },
   {
-    dir: [0, -1, 0], tile: 2, shade: 0.50, uAxis: [1, 0, 0], vAxis: [0, 0, 1],
+    key: 'ny', dir: [0, -1, 0], tile: 2, shade: 0.50, uAxis: [1, 0, 0], vAxis: [0, 0, 1],
     verts: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   },
   {
-    dir: [0, 0, 1], tile: 1, shade: 0.88, uAxis: [1, 0, 0], vAxis: [0, 1, 0],
+    key: 'pz', dir: [0, 0, 1], tile: 1, shade: 0.88, uAxis: [1, 0, 0], vAxis: [0, 1, 0],
     verts: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   },
   {
-    dir: [0, 0, -1], tile: 1, shade: 0.88, uAxis: [-1, 0, 0], vAxis: [0, 1, 0],
+    key: 'nz', dir: [0, 0, -1], tile: 1, shade: 0.88, uAxis: [-1, 0, 0], vAxis: [0, 1, 0],
     verts: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]], uvs: [[0, 0], [1, 0], [1, 1], [0, 1]]
   }
 ];
@@ -105,7 +105,11 @@ export function buildSectionBatches(ch, si, ctx) {
 
           const target = block.liquid ? water
             : (block.cutout ? cutout : (block.transparent ? glass : opaque));
-          const tileName = tiles[face.tile];
+          // tiles 是 [顶, 侧面, 底] —— 四个侧面共用同一张。熔炉的炉门只该在一面，
+          // 所以方块还可以用 faces 表按方向覆盖单面（px/nx/py/ny/pz/nz）。
+          // 注意侧面那张同时是物品栏图标（items.js 取 tiles[1]），所以别去改 tiles。
+          const override = block.faces ? block.faces[face.key] : null;
+          const tileName = override || tiles[face.tile];
           const ti = TILE_INDEX[tileName];
           const uvR = tileUV(ti === undefined ? 0 : ti);
 

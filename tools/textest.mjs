@@ -490,6 +490,73 @@ const deepBad = walkable.filter((m) => m.z / m.y < 0.8);
 check('四足动物身子是横躺的（长比高 ' + walkable.map((m) => m.t + '=' + (m.z / m.y).toFixed(2)).join(' ') + '）',
   deepBad.length === 0, deepBad.map((m) => m.t + ' ' + (m.z / m.y).toFixed(2)).join(' | '));
 
+// ---- C3 方块六个面各用哪张贴图 ----
+//
+// tiles 只有 [顶, 侧面, 底] 三项，四个侧面天然共用一张 —— 于是凡是「正面和侧面不一样」
+// 的方块，四个侧面全长一个样。熔炉原版就一个炉门，这里曾经四面都是炉门。
+// 方块可以用 faces 表按方向覆盖单面，这条断言直接去建出来的几何里量：
+// 把一个孤零零的熔炉丢进空区块，六个面各取哪张图，一个个认出来。
+const faceTiles = await ev(`(async function(){
+  const { BLOCKS } = await import('/js/blocks.js');
+  const { buildSectionBatches } = await import('/js/mesher.js');
+  const { TILE_NAMES, ATLAS_COLS } = await import('/js/textures.js');
+  const FID = BLOCKS.find(function(b){ return b.key === 'furnace'; }).id;
+  const HEIGHT = 80, CHUNK = 16;
+  const vol = CHUNK * CHUNK * HEIGHT;
+  const ch = {
+    cx: 0, cz: 0,
+    data: new Uint8Array(vol),
+    skyLight: new Uint8Array(vol).fill(15),
+    blockLight: new Uint8Array(vol)
+  };
+  const bx = 4, by = 40, bz = 4;
+  ch.data[bx + CHUNK * (bz + CHUNK * by)] = FID;
+  const buf = buildSectionBatches(ch, 2, { getChunk: function(){ return ch; }, useAO: false }).opaque;
+
+  // 顶点按「四个一组」切成面，每个面里那个恒定的坐标轴就是它的法线方向。
+  // 不能按「顶点碰到了 bx/bx+1」来判断方向 —— 每个面的顶点都同时落在两面墙上。
+  const out = {};
+  const NAMES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+  const org = [bx, by, bz];
+  for (let q = 0; q * 12 + 11 < buf.pos.length; q++) {
+    const base = q * 12;
+    const p = [];
+    for (let k = 0; k < 4; k++) p.push([buf.pos[base + k * 3], buf.pos[base + k * 3 + 1], buf.pos[base + k * 3 + 2]]);
+    let axis = -1, val = 0;
+    for (let a = 0; a < 3; a++) {
+      if (p[0][a] === p[1][a] && p[1][a] === p[2][a] && p[2][a] === p[3][a]) { axis = a; val = p[0][a]; }
+    }
+    const key = axis < 0 ? 'other' : NAMES[axis * 2 + (val === org[axis] ? 1 : 0)];
+    const f = out[key] || (out[key] = { n: 0, u: 9, v: 9 });
+    f.n++;
+    for (let k = 0; k < 4; k++) {
+      const j = (base / 3 + k) * 2;
+      if (buf.uv[j] < f.u) f.u = buf.uv[j];
+      if (buf.uv[j + 1] < f.v) f.v = buf.uv[j + 1];
+    }
+  }
+  const s = 1 / ATLAS_COLS;
+  for (const k in out) {
+    const f = out[k];
+    const col = Math.round(f.u / s);
+    const row = Math.round((1 - f.v) / s) - 1;
+    f.tile = TILE_NAMES[row * ATLAS_COLS + col];
+  }
+  return out;
+})()`);
+
+const sides = ['px', 'nx', 'pz', 'nz'].map((k) => faceTiles[k] && faceTiles[k].tile);
+const doorCount = sides.filter((t) => t === 'furnace_front').length;
+check('一个孤零零的熔炉建出 6 个面（六个方向各一个）',
+  ['px', 'nx', 'py', 'ny', 'pz', 'nz'].every((k) => faceTiles[k] && faceTiles[k].n === 1),
+  JSON.stringify(faceTiles));
+check('熔炉只有一面是炉门（实测 ' + doorCount + ' 面是 furnace_front）', doorCount === 1, JSON.stringify(sides));
+check('熔炉顶面是 furnace_top、底面是 furnace_side',
+  faceTiles.py && faceTiles.py.tile === 'furnace_top' && faceTiles.ny && faceTiles.ny.tile === 'furnace_side',
+  (faceTiles.py && faceTiles.py.tile) + ' / ' + (faceTiles.ny && faceTiles.ny.tile));
+check('熔炉另外三个侧面是 furnace_side（' + sides.filter((t) => t === 'furnace_side').length + ' 面）',
+  sides.filter((t) => t === 'furnace_side').length === 3, JSON.stringify(sides));
+
 // ---- D 单帧渲染不能报错 ----
 const renderErr = await ev(`(function(){
   const g = window.game;

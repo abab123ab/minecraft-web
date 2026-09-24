@@ -55,7 +55,14 @@ def('glass', { label: '玻璃', tiles: ['glass', 'glass', 'glass'], hardness: 0.
 def('crafting_table', { label: '工作台', tiles: ['crafting_top', 'crafting_side', 'planks'], hardness: 2.5, tool: 'axe', tier: 0, sound: 'wood' });
 // tiles 是 [顶, 侧面, 底]。原来顶面写的是 furnace_side，导致 furnace_top 这张贴图
 // 加载进图集却没人用，熔炉顶面看起来像个石砖面。
-def('furnace', { label: '熔炉', tiles: ['furnace_top', 'furnace_front', 'furnace_side'], hardness: 3.5, tool: 'pickaxe', tier: 1, requiresTool: true });
+// 四个侧面共用 tiles[1] 的话，炉门会四面都长一个 —— faces 表用来把它按回一面。
+// 留 -z 那一面当炉门：玩家出生时朝 -z 看，放下的熔炉正好是炉门对着自己。
+// tiles[1] 保持 furnace_front 不动 —— 物品栏里熔炉的图标取的就是它。
+def('furnace', {
+  label: '熔炉', tiles: ['furnace_top', 'furnace_front', 'furnace_side'],
+  faces: { px: 'furnace_side', nx: 'furnace_side', pz: 'furnace_side' },
+  hardness: 3.5, tool: 'pickaxe', tier: 1, requiresTool: true
+});
 def('coal_ore', { label: '煤矿石', tiles: ['coal_ore', 'coal_ore', 'coal_ore'], hardness: 3.0, tool: 'pickaxe', tier: 1, requiresTool: true, drop: 'coal', ore: true });
 def('iron_ore', { label: '铁矿石', tiles: ['iron_ore', 'iron_ore', 'iron_ore'], hardness: 3.0, tool: 'pickaxe', tier: 2, requiresTool: true, ore: true });
 def('gold_ore', { label: '金矿石', tiles: ['gold_ore', 'gold_ore', 'gold_ore'], hardness: 3.0, tool: 'pickaxe', tier: 3, requiresTool: true, ore: true });
