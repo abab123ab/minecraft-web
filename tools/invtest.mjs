@@ -1068,6 +1068,80 @@ const furnaceTop = await ev(`(async function(){
 })()`);
 check('熔炉顶面用 furnace_top（原来误用 furnace_side）', furnaceTop.tiles[0] === 'furnace_top' && furnaceTop.hasTop === true, JSON.stringify(furnaceTop));
 
+// ---- 28 中键选取方块 ----
+// 摆一个已知局面：手上一格泥土、背包第 21 格一组圆石，正前方放一格圆石，
+// 视线按几何算准，然后真的往 canvas 上发一个中键 mousedown。
+const pickSetup = `(async function(){
+  const g = window.game;
+  const mod = await import('/js/blocks.js');
+  const I = await import('/js/items.js');
+  const idOf = function(k){ return mod.BLOCKS.find(function(b){ return b.key === k; }).id; };
+  const itemOf = function(k){ return I.ITEM_BY_KEY[k].id; };
+  const inv = g.inventory;
+  for (var i = 0; i < inv.slots.length; i++) inv.slots[i] = null;
+  inv.selected = 0;
+  inv.slots[0] = { id: itemOf('dirt'), count: 7, dmg: 0 };
+  inv.slots[20] = { id: itemOf('cobblestone'), count: 12, dmg: 0 };
+
+  const p = g.player.pos;
+  const bx = Math.floor(p.x) + 2, bz = Math.floor(p.z);
+  let y = 78; while (y > 0 && g.world.getBlock(bx, y, bz) === 0) y--;
+  const gy = Math.max(y, 30);
+  for (var dy = 1; dy <= 3; dy++) g.world.setBlock(bx, gy + dy, bz, 0);
+  g.world.setBlock(bx, gy + 1, bz, idOf('cobblestone'));
+
+  const sx = bx - 2, sz = bz;
+  let sy = 78; while (sy > 0 && g.world.getBlock(sx, sy, sz) === 0) sy--;
+  for (var dy2 = 1; dy2 <= 3; dy2++) g.world.setBlock(sx, sy + dy2, sz, 0);
+  g.player.pos.set(sx + 0.5, sy + 1, sz + 0.5);
+  g.player.vel.set(0, 0, 0);
+  g.player.flying = true;
+  g.player.yaw = g.player.targetYaw = -Math.PI / 2;   // 朝 +x
+  // 俯角按几何算：眼睛到方块中心，别靠手调数字
+  const eyeY = sy + 1 + 1.62;
+  g.player.pitch = g.player.targetPitch = Math.atan2(gy + 1.5 - eyeY, bx - sx);
+  return { cobble: itemOf('cobblestone'), dirt: itemOf('dirt'), gy: gy };
+})()`;
+const pickInfo = await ev(pickSetup);
+await sleep(600);
+const pick = await ev(`(async function(){
+  const g = window.game;
+  const prevLocked = g.locked;
+  const hit = g.hitTest();
+  g.locked = true;
+  g.canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 }));
+  const inv = g.inventory;
+  const out = {
+    瞄到了: hit ? hit.id : null,
+    selected: inv.selected,
+    手上了: inv.slots[0] && inv.slots[0].id,
+    背包第21格: inv.slots[20] && inv.slots[20].id,
+    手上了几个: inv.slots[0] && inv.slots[0].count
+  };
+  g.locked = prevLocked;
+  return out;
+})()`);
+check('中键前视线确实指着那格圆石', pick.瞄到了 !== null, JSON.stringify(pick));
+check('中键把背包里的圆石换到了手上', pick.手上了 === pickInfo.cobble && pick.selected === 0, JSON.stringify(pick));
+check('被换下来的泥土落回原地（不凭空吞掉）', pick.背包第21格 === pickInfo.dirt, JSON.stringify(pick));
+check('整组数量原样搬过去（12 个）', pick.手上了几个 === 12, String(pick.手上了几个));
+
+const pickNone = await ev(`(async function(){
+  const g = window.game;
+  const inv = g.inventory;
+  for (var i = 0; i < inv.slots.length; i++) inv.slots[i] = null;
+  inv.selected = 3;
+  const prevLocked = g.locked;
+  g.locked = true;
+  g.canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 }));
+  const out = { selected: inv.selected, 手上了: inv.slots[3] };
+  g.locked = prevLocked;
+  return out;
+})()`);
+check('手上背包里都没有这种东西时，中键什么都不做（生存模式不凭空发物品）',
+  pickNone.selected === 3 && pickNone.手上了 === null, JSON.stringify(pickNone));
+await ev(`(function(){ window.game.inventory.slots.fill(null); window.game.inventory.selected = 0; return true; })()`);
+
 console.log('\n================ 库存/合成交互验证 ================');
 let pass = 0;
 for (const r of results) {

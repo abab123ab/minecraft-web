@@ -272,6 +272,7 @@ class Game {
     this.canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
       if (e.button === 0) { this.mining = true; this.mineState = null; }
+      if (e.button === 1) { e.preventDefault(); this.pickBlock(); }
       if (e.button === 2) { this.useHeld = true; this.useTimer = USE_REPEAT; this.useItem(); }
     });
     window.addEventListener('mouseup', (e) => {
@@ -452,6 +453,38 @@ class Game {
   hitTest() {
     const eye = this.player.eyePos();
     return this.world.raycast(eye, this.lookDir(), REACH);
+  }
+
+  // 中键选取方块（原版行为）：把准星指着的那种方块切到手上。
+  // 手里或热键栏里有就切成它；只有背包里有就换过来（换掉的物品落到原来那格，不丢东西）；
+  // 都没有就什么都不做 —— 这是生存模式，不凭空发物品。
+  pickBlock() {
+    const hit = this.hitTest();
+    if (!hit) return false;
+    let want = 0;
+    for (const it of ITEMS) { if (it.blockId === hit.id) { want = it.id; break; } }
+    if (!want) return false;
+    const slots = this.inventory.slots;
+    for (let i = 0; i < HOTBAR_SIZE; i++) {
+      if (slots[i] && slots[i].id === want) {
+        this.inventory.selected = i;
+        this.ui.render();
+        this.showHeldName();
+        return true;
+      }
+    }
+    for (let i = HOTBAR_SIZE; i < INV_SIZE; i++) {
+      if (slots[i] && slots[i].id === want) {
+        const cur = this.inventory.selected;
+        const t = slots[cur];
+        slots[cur] = slots[i];
+        slots[i] = t || null;
+        this.ui.render();
+        this.showHeldName();
+        return true;
+      }
+    }
+    return false;
   }
 
   // 按住右键连续放置。只对方块生效 —— 吃食物、开工作台/熔炉这些按一次就够，
