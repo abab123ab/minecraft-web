@@ -15,6 +15,7 @@ const SUITES = [
   ['meshlighttest.mjs', '光照渲染'],
   ['mobtest.mjs', '生物回归'],
   ['mobopttest.mjs', '生物优化'],
+  ['textest.mjs', '贴图与颜色'],
   ['orechaintest.mjs', '连锁挖矿'],
   ['invtest.mjs', '背包'],
   ['layouttest.mjs', 'HUD 布局'],
