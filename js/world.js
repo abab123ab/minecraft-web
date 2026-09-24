@@ -21,6 +21,11 @@ export class World {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
+    // 图集里的贴图颜色是「显示器上的颜色」（sRGB），必须如实声明，
+    // 否则 three 不把它当 sRGB 解码，直接拿编码值当线性值算，
+    // 最后输出时又编码一遍 —— 整个世界的方块会整体亮一大截、颜色发白。
+    // 生物贴图一直有这一行，方块没有，所以只有生物是正常浓淡。
+    tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.ClampToEdgeWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
     this.atlasTexture = tex;

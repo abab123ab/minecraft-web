@@ -22,7 +22,14 @@ export class Sky {
 
   build() {
     const loader = new THREE.TextureLoader();
-    const pixel = (t) => { t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; return t; };
+    // 太阳、月亮、云跟方块贴图一样是「显示器颜色」，都要按 sRGB 解码。
+    // 漏掉这一行它们会比预期更亮更淡，蓝天里的云会糊成一片灰白。
+    const pixel = (t) => {
+      t.magFilter = THREE.NearestFilter;
+      t.minFilter = THREE.NearestFilter;
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
 
     const sunTex = pixel(loader.load('textures/environment/sun.png'));
     const moonTex = pixel(loader.load('textures/environment/moon_phases.png'));
@@ -41,10 +48,9 @@ export class Sky {
     this.sun = sprite(sunTex, 64);
     this.moon = sprite(moonTex, 48);
 
-    const cloudTex = loader.load('textures/environment/clouds.png');
+    const cloudTex = pixel(loader.load('textures/environment/clouds.png'));
     cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
     cloudTex.repeat.set(20, 20);
-    cloudTex.magFilter = THREE.NearestFilter;
     this.clouds = new THREE.Mesh(
       new THREE.PlaneGeometry(2600, 2600),
       new THREE.MeshBasicMaterial({

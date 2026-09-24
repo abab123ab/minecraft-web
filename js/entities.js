@@ -26,6 +26,8 @@ export class DroppedItems {
     t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
+    // 掉在地上的物品也是画布贴图，同样要声明成 sRGB，不然会比背包里的图标白一档。
+    t.colorSpace = THREE.SRGBColorSpace;
     this.texCache.set(id, t);
     return t;
   }
