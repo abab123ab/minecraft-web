@@ -47,7 +47,9 @@ def('sand', { label: '沙子', tiles: ['sand', 'sand', 'sand'], hardness: 0.5, t
 def('sandstone', { label: '砂岩', tiles: ['sandstone_top', 'sandstone_side', 'sandstone_top'], hardness: 0.8, tool: 'pickaxe', tier: 1, requiresTool: true });
 def('gravel', { label: '沙砾', tiles: ['gravel', 'gravel', 'gravel'], hardness: 0.6, tool: 'shovel', tier: 0, sound: 'gravel' });
 def('snow_block', { label: '雪', tiles: ['snow', 'snow_side', 'dirt'], hardness: 0.2, tool: 'shovel', tier: 0, requiresTool: true, sound: 'dirt' });
-def('ice', { label: '冰', tiles: ['ice', 'ice', 'ice'], hardness: 0.5, tool: 'pickaxe', tier: 1, requiresTool: true });
+// ice.png 整张图的 alpha 是 190（74.5%），本来就是半透明的。
+// 以前当不透明方块画，alpha 被忽略，冰就是一块实心蓝砖，站在冰湖上完全看不见冰下。
+def('ice', { label: '冰', tiles: ['ice', 'ice', 'ice'], hardness: 0.5, tool: 'pickaxe', tier: 1, requiresTool: true, opaque: false, transparent: true });
 def('wool', { label: '白色羊毛', tiles: ['wool', 'wool', 'wool'], hardness: 0.8, tool: null, tier: 0, sound: 'wool' });
 def('glass', { label: '玻璃', tiles: ['glass', 'glass', 'glass'], hardness: 0.3, tool: null, tier: 0, drop: null, opaque: false, transparent: true, sound: 'glass' });
 def('crafting_table', { label: '工作台', tiles: ['crafting_top', 'crafting_side', 'planks'], hardness: 2.5, tool: 'axe', tier: 0, sound: 'wood' });
