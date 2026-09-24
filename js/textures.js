@@ -69,11 +69,20 @@ const CRACK_TILES = [
 
 export const ASSET_COUNT = Object.keys(BLOCK_TILES).length + ITEM_TILES.length + CRACK_TILES.length;
 
+// 原版皮质护甲的贴图是「灰度蒙版」，靠染色才变成皮子的棕色
+// （原版用的就是 #A06540）。这里漏了这一步，所以四件皮甲一直是灰的，
+// 跟铁甲几乎分不出来。四张图的每个像素都是 R=G=B，所以只要乘上这个颜色。
+const LEATHER = [160, 101, 64];
+
 const TINT = {
   grass_top: [121, 192, 90],
   leaves: [89, 174, 48],
   spruce_leaves: [97, 153, 97],
-  water: [63, 118, 228]
+  water: [63, 118, 228],
+  leather_helmet: LEATHER,
+  leather_chestplate: LEATHER,
+  leather_leggings: LEATHER,
+  leather_boots: LEATHER
 };
 
 const OPAQUE = { leaves: 1, spruce_leaves: 1 };
