@@ -85,8 +85,9 @@ const placed = await ev(`(function(){
   g.mobs.clear();
   g.mobs.spawnTimer = 999;
   // 封面固定在白天。注意 isDay / isNight 在 main.js 里是 getter，
-  // 直接 `g.isDay = true` 会被静默丢弃（等于没设），只能写 timeOfDay。
+  // 直接给 g.isDay 赋值会被静默丢弃（等于没设），只能写 timeOfDay。
   // 0.28 就是游戏的初始时刻（白天），跟改之前的实际表现完全一致。
+  // （这段是模板字符串里的注释，别在里面写反引号。）
   g.sky.timeOfDay = 0.28;
 
   const topY = (x, z) => { let y = 79; while (y > 0 && g.world.getBlock(x, y, z) === 0) y--; return y; };
