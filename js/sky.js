@@ -81,11 +81,18 @@ export class Sky {
     this.sun = sprite(sunTex, 64);
     this.moon = sprite(moonTex, 48);
 
+    // clouds.png 是 256x256 的「1 位」掩码（调色板只有全透 / 全不透两种 alpha），
+    // 原版把「一个贴图像素」摊成 12 格。第一版在这里 repeat 了 20 遍、铺在 2600 的平面上，
+    // 于是一个像素只有 2600 / (256*20) = 0.5 格 —— 比原版小了 24 倍，
+    // 那么细的抖动噪点在地面上看就是一片糊在天空上的电视雪花，根本不像云。
+    // 改成整张贴图刚好铺满 256*12 格。
+    const CLOUD_TEXEL = 12;
+    const CLOUD_SPAN = 256 * CLOUD_TEXEL;
     const cloudTex = pixel(loader.load('textures/environment/clouds.png'));
     cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
-    cloudTex.repeat.set(20, 20);
+    cloudTex.repeat.set(1, 1);
     this.clouds = new THREE.Mesh(
-      new THREE.PlaneGeometry(2600, 2600),
+      new THREE.PlaneGeometry(CLOUD_SPAN, CLOUD_SPAN),
       new THREE.MeshBasicMaterial({
         map: cloudTex, transparent: true, opacity: 0.7,
         depthWrite: false, fog: false, side: THREE.DoubleSide
