@@ -120,7 +120,7 @@ const spot = await ev(`(async function(){
   };
   g.mobs.clear();
   g.mobs.spawnTimer = 999;
-  g.isDay = true;
+  g.sky.timeOfDay = 0.28;   // isDay 是 getter，写 g.isDay = true 是死赋值
   const p0 = g.player.pos;
   const bx0 = Math.floor(p0.x), bz0 = Math.floor(p0.z);
   let best = null;

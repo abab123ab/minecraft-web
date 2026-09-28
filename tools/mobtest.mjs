@@ -289,7 +289,7 @@ check('运行期无 JS 报错', cdp.errors.length === 0, cdp.errors.slice(0, 3).
 await ev(`(async function(){
   const g = window.game;
   g.mobs.clear();
-  g.isDay = true;
+  g.sky.timeOfDay = 0.28;   // isDay 是 getter，写 g.isDay = true 是死赋值
   g.mobs.spawnTimer = 999;
   const p = g.player.pos;
   const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);

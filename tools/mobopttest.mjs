@@ -157,7 +157,7 @@ check('掉落物放大到正常尺寸', drop.scaleFull > 0.3, 'scaleFull=' + dro
 check('多掉落物位置散开', drop.count < 2 || drop.scattered, 'scattered=' + drop.scattered);
 
 // ---- E 环境音不报错（跑几秒让被动生物发声）----
-await ev(`(function(){ const g = window.game; g.mobs.clear(); g.isDay = true; return true; })()`);
+await ev(`(function(){ const g = window.game; g.mobs.clear(); g.sky.timeOfDay = 0.28; return true; })()`);
 await sleep(3000);
 check('环境音/动画运行期无 JS 报错', cdp.errors.length === 0, cdp.errors.slice(0, 5).join(' | '));
 

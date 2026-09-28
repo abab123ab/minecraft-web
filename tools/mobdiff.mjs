@@ -111,7 +111,7 @@ await sleep(1200);
 
 await ev(`(function(){
   const g = window.game;
-  g.mobs.clear(); g.mobs.spawnTimer = 999; g.isDay = true; g.player.pitch = 0;
+  g.mobs.clear(); g.mobs.spawnTimer = 999; g.sky.timeOfDay = 0.28; g.player.pitch = 0;
   const p = g.player.pos;
   const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
   for (let dx = -8; dx <= 8; dx++)
