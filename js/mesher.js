@@ -85,7 +85,10 @@ export function buildSectionBatches(ch, si, ctx) {
         if (!tiles) continue;
 
         if (id === B.torch) {
-          addTorchQuads(opaque, x, y, z, tiles);
+          // 火把走镂空批次。它那张贴图 80% 是全透明像素（只有中间一条是木棍 + 火苗），
+          // 以前挂在镂空批次出来之前，只能丢进不透明批次 —— 而那个批次不看 alpha，
+          // 透明像素按自己的 rgb(0,0,0) 画出来，整根火把就是一根黑条。
+          addTorchQuads(cutout, x, y, z, tiles);
           continue;
         }
 
@@ -204,16 +207,27 @@ export function setSectionMesh(scene, ch, si, prop, buf, material, order) {
 function addTorchQuads(target, x, y, z, tiles) {
   const ti = TILE_INDEX[tiles[1]];
   const uvR = tileUV(ti === undefined ? 0 : ti);
-  const W = 0.20, H = 0.60;
+  // torch.png 的内容只占 x=6..9、y=1..15 这一小块（火焰 6 行 + 木棍 9 行），
+  // 四周全是全透明像素。UV 要正好取这一块 —— 整张 16x16 铺上去的话，
+  // 木棍只占 2/16，实宽 2/16*0.2 = 0.025 格，细成一根头发。
+  // 下面这些是「贴图内的比例」，不是格数：u/v 的分母都是 16（一个贴图像素的宽度）。
+  // v 方向朝上，贴图第 r 行占 v 的 [(15-r)/16, (16-r)/16]。
+  const U0 = 6 / 16, U1 = 10 / 16;      // 横向：第 6~9 列
+  const V0 = 0, V1 = 15 / 16;           // 纵向：第 1~15 行（v=0 是最底下那行）
+  const FU0 = 6 / 16, FU1 = 10 / 16;    // 顶面只画火苗：第 1~6 行
+  const FV0 = 9 / 16, FV1 = 15 / 16;
+  const W = 0.20, H = 0.625;            // 木棍 = 内容宽的一半 = 0.10 格
   const x0 = x + 0.5 - W / 2, x1 = x + 0.5 + W / 2;
   const z0 = z + 0.5 - W / 2, z1 = z + 0.5 + W / 2;
   const yb = y, yt = y + H;
+  const side = [[U0, V0], [U1, V0], [U1, V1], [U0, V1]];
+  const top = [[FU0, FV0], [FU1, FV0], [FU1, FV1], [FU0, FV1]];
   const quads = [
-    { pts: [[x1, yb, z1], [x1, yb, z0], [x1, yt, z0], [x1, yt, z1]], uv: [[0, 0], [1, 0], [1, 1], [0, 1]], shade: 0.7 },
-    { pts: [[x0, yb, z0], [x0, yb, z1], [x0, yt, z1], [x0, yt, z0]], uv: [[0, 0], [1, 0], [1, 1], [0, 1]], shade: 0.7 },
-    { pts: [[x0, yb, z1], [x1, yb, z1], [x1, yt, z1], [x0, yt, z1]], uv: [[0, 0], [1, 0], [1, 1], [0, 1]], shade: 0.88 },
-    { pts: [[x1, yb, z0], [x0, yb, z0], [x0, yt, z0], [x1, yt, z0]], uv: [[0, 0], [1, 0], [1, 1], [0, 1]], shade: 0.88 },
-    { pts: [[x0, yt, z0], [x1, yt, z0], [x1, yt, z1], [x0, yt, z1]], uv: [[0, 0], [1, 0], [1, 1], [0, 1]], shade: 1.0 }
+    { pts: [[x1, yb, z1], [x1, yb, z0], [x1, yt, z0], [x1, yt, z1]], uv: side, shade: 0.7 },
+    { pts: [[x0, yb, z0], [x0, yb, z1], [x0, yt, z1], [x0, yt, z0]], uv: side, shade: 0.7 },
+    { pts: [[x0, yb, z1], [x1, yb, z1], [x1, yt, z1], [x0, yt, z1]], uv: side, shade: 0.88 },
+    { pts: [[x1, yb, z0], [x0, yb, z0], [x0, yt, z0], [x1, yt, z0]], uv: side, shade: 0.88 },
+    { pts: [[x0, yt, z0], [x1, yt, z0], [x1, yt, z1], [x0, yt, z1]], uv: top, shade: 1.0 }
   ];
   for (const q of quads) {
     const base = target.pos.length / 3;
