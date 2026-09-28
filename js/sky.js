@@ -131,10 +131,19 @@ export class Sky {
     const night = new THREE.Color(SKY_NIGHT);
     const day = new THREE.Color(SKY_DAY);
     const dusk = new THREE.Color(SKY_DUSK);
+    // 三种天色之间是直线对插的，而橙 (#d9803f) 和蓝 (#78a7ff) 在线性空间对插，
+    // 中点必然塌成灰紫粉 —— 把整条曲线算出来看，饱和度最低点 0.22（#b195c0）
+    // 恰好落在太阳高度 0，也就是日落那一刻，整个天连雾一起变成一片粉。
+    // 改的不是颜色而是窗口：太阳贴着地平线那一段（0.06..-0.10）整段停在暖橙，
+    // 橙 -> 蓝的过渡挪到太阳升起来之上、缩窄到 0.06..0.20（约 13 秒）——
+    // 发灰那一下从「日落那一刻」变成太阳升高后的一闪。
+    // 往夜的淡出也从 -0.50 提到 -0.35：原来拖得太长，isNight 早就 true 了、
+    // 世界光照也已经到底，天上却还是一整片亮橙，两头对不上。
     let sky;
-    if (elev > 0.15) sky = day;
-    else if (elev > -0.15) sky = dusk.clone().lerp(day, (elev + 0.15) / 0.3);
-    else sky = night.clone().lerp(dusk, Math.max(0, (elev + 0.5) / 0.35));
+    if (elev > 0.20) sky = day;
+    else if (elev > 0.06) sky = dusk.clone().lerp(day, (elev - 0.06) / 0.14);
+    else if (elev > -0.10) sky = dusk;
+    else sky = night.clone().lerp(dusk, Math.max(0, (elev + 0.35) / 0.25));
     this.scene.background = sky;
     if (this.scene.fog) this.scene.fog.color.copy(sky);
     // 夜里世界得真的变暗。原来这里是 0.30 + 0.70 * amt，而 amt 的下限又是 0.30，
