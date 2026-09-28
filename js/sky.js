@@ -146,6 +146,10 @@ export class Sky {
     this.world.matCutout.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
     this.world.matWater.color.setRGB(light, light, light);
     this.world.matGlass.color.setRGB(light, light, light);
+    // 云是 MeshBasicMaterial（不受光照），不跟着昼夜走 —— 夜里世界黑成一片，
+    // 云还是死白的一团，比脚下的地面还亮。按 sky light 同比压暗
+    // （白天 light=1.0 时这支是恒等变换，一点不影响白天的观感）。
+    this.clouds.material.color.setRGB(light, light, light);
     const a = this.timeOfDay * Math.PI * 2 - Math.PI / 2;
     const sx = Math.cos(a) * 420, sy = Math.sin(a) * 420;
     const cp = this.camera.position;
