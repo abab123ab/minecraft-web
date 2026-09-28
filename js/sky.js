@@ -122,7 +122,12 @@ export class Sky {
     const elev = Math.sin(t * Math.PI * 2 - Math.PI / 2);
     this.isDay = elev > 0.15;
     this.isNight = elev < -0.1;
-    const amt = Math.max(0.30, Math.min(1, elev * 1.6 + 0.45));
+    // 太阳高度 -> 环境光系数。下限 0.12 是「深夜」的底：以前是 0.30，
+    // 加上 light 的 0.30 偏移，两头一夹，午夜的地面只有白天的 0.51 亮 ——
+    // 实测石墙白天 rgb 118、午夜 86，天空却已经掉到 #05070f 全黑，地面和天空对不上。
+    // 注意渲染是 sRGB 输出，这个系数作用在线性空间，感知亮度不是按比例掉：
+    // 系数 0.36 时石墙还能到 72/255，要真的暗下来得把系数压到 0.17（石墙约 53/255）。
+    const amt = Math.max(0.12, Math.min(1, elev * 1.6 + 0.45));
     const night = new THREE.Color(SKY_NIGHT);
     const day = new THREE.Color(SKY_DAY);
     const dusk = new THREE.Color(SKY_DUSK);
@@ -132,7 +137,10 @@ export class Sky {
     else sky = night.clone().lerp(dusk, Math.max(0, (elev + 0.5) / 0.35));
     this.scene.background = sky;
     if (this.scene.fog) this.scene.fog.color.copy(sky);
-    const light = 0.30 + 0.70 * amt;
+    // 夜里世界得真的变暗。原来这里是 0.30 + 0.70 * amt，而 amt 的下限又是 0.30，
+    // 两头一夹，午夜的地面亮度是白天的 0.51 —— 实测石墙白天 rgb 118、午夜 86，
+    // 只暗了 27%，可天空已经掉到 #05070f 全黑，地面和天空完全对不上，火把也失去意义。
+    const light = 0.08 + 0.92 * amt;
     this.light = light;
     this.world.matOpaque.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
     this.world.matCutout.color.setRGB(light, light, light * (0.96 + 0.04 * amt));
