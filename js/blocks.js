@@ -1,3 +1,5 @@
+import { bedBoxes, bedCollide, bedFace, bedRot } from './bedshape.js';
+
 export const AIR = 0;
 
 export const BLOCKS = [];
@@ -22,7 +24,20 @@ function def(key, opts) {
     unbreakable: false,
     bonusDrop: null,
     light: 0,
-    sound: 'stone'
+    sound: 'stone',
+    // ---- 形状与朝向（可选，不填就是满格立方体）----
+    // boxes(meta)  外观用的盒子表，每项 [x0,y0,z0,x1,y1,z1]，单位是 0..1 的方块本地坐标。
+    //              一个方块可以有多个盒子（床 = 床垫体 + 两条腿）。
+    // collide(meta) 判定箱。形状和碰撞可以分开 —— 原版床就是这样：判定箱是一个 9/16
+    //              高的整底盒子，腿只是外观模型、不参与碰撞。不填 = 跟外观一样。
+    // faceFor(meta, key) 这一面用哪张贴图；返回 null 表示这一面不建。不填 = 查 faces/tiles。
+    // rotFor(meta, key)  这一面贴图转多少度（0/90/180/270）。不填 = 0。
+    boxes: null,
+    collide: null,
+    faceFor: null,
+    rotFor: null,
+    // 有状态的方块：meta 不为 0 才有意义。放大床的时候由 main.js 算好塞进去。
+    oriented: false
   }, opts);
   BLOCKS.push(b);
   BLOCK_BY_KEY[key] = b;
@@ -84,18 +99,24 @@ def('torch', {
   solid: false, opaque: false, transparent: true, drop: 'torch', light: 14, flat: true, sound: 'wood'
 });
 
-// 床：六张分面贴图（tools/makebed.mjs 生成）。
-// 以前只有一张 side 图、六个面全用它 —— 四个侧面长得一模一样，每一面都在同一个位置
-// 有床头板，分不出床头床尾；顶面也是这张侧视图。现在 tiles 给顶/侧/底，
-// faces 再把四个侧面各指过去：床头板固定朝 -z（这张图没有朝向状态，放下去就是朝北）。
-// 注意 tiles[1] 同时是物品栏图标（items.js 取 tiles[1]），所以侧面那张仍叫 bed。
+// 床：原版是 2 格长（foot + head）× 1 格宽 × 9/16 高，两条 3×3×3 的腿。
 //
-// cutout 保留：它现在不是因为贴图有透明像素（这六张全不透明），而是 lighting.js
-// 用这个标志表示「透光、每层扣 1 级」。去掉它床会变成完全不透光的实心块，那是另一件事。
+// 形状、朝向、分格、贴图、旋转全部由 js/bedshape.js 出 —— 那个文件是床几何的唯一来源，
+// 里面写清了原版判定箱（9/16 整底，跟腿无关）、腿落在整张床的哪一端、
+// 每个面用哪张贴图、顶面要转多少度、放置时按玩家朝向怎么定床头。
+//
+// meta 是一个字节：meta = part | (facing << 1)（part 0=床尾 1=床头；facing 0=北 1=南 2=西 3=东）。
+//
+// tiles/faces 还是旧的满格六面贴图 —— 物品栏图标取的是 tiles[1]（js/items.js），
+// 而渲染管线要等 mesher 支持多盒子 + faceFor/rotFor 之后才接管这两行。
 def('bed', {
   label: '床', tiles: ['bed_top', 'bed', 'bed_bottom'],
   faces: { px: 'bed_side2', nx: 'bed', pz: 'bed_foot', nz: 'bed_head' },
-  hardness: 0.4, tool: null, tier: 0,
+  boxes: bedBoxes,
+  collide: bedCollide,
+  faceFor: bedFace,
+  rotFor: bedRot,
+  hardness: 0.2, tool: null, tier: 0,
   solid: true, opaque: true, transparent: false, cutout: true, drop: 'bed', light: 0, sound: 'wood'
 });
 

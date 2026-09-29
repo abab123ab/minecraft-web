@@ -121,6 +121,94 @@ check('床方块已注册', blk !== null);
 check('床是实心不透明方块', blk && blk.solid === true && blk.opaque === true);
 check('床掉落物为 bed', blk && blk.drop === 'bed');
 
+// ---- A2 床的形状（原版：2 格长，床垫体 16×16×6 悬在 3/16、顶面 9/16，两个端头各一条 3×3×3 的腿）----
+const shape = await ev(`(async function(){
+  const s = await import('/js/shapes.js');
+  const bd = await import('/js/bedshape.js');
+  const m = await import('/js/blocks.js');
+  const bed = m.BLOCK_BY_KEY.bed.id;
+  const stone = m.BLOCK_BY_KEY.stone.id;
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const meta = (fc, head) => bd.bedMeta(fc, head);
+
+  const all = [];
+  for (let fc = 0; fc < 4; fc++) {
+    for (const head of [false, true]) {
+      const mm = meta(fc, head);
+      const boxes = s.blockBoxes(bed, mm);
+      all.push({
+        fc, head,
+        n: boxes.length,
+        mattress: boxes[0],
+        legs: boxes.slice(1),
+        collide: s.blockCollide(bed, mm)[0],
+        bounds: s.shapeBounds(bed, mm)
+      });
+    }
+  }
+
+  // 腿在世界上必须只落在整张床的两个外端：foot 格在 (0,0,0)，head 格在 foot + facing 方向。
+  // 这是四向朝向的命门 —— 腿端向算错时，中间会凭空多出一组柱子。
+  const legs = [];
+  for (let fc = 0; fc < 4; fc++) {
+    const f = bd.BED_FACING[fc];
+    const ax = f[0] !== 0 ? 0 : 2;
+    const spans = [];
+    for (let i = 0; i < 2; i++) {
+      const boxes = s.blockBoxes(bed, meta(fc, i === 1));
+      const orig = i === 0 ? 0 : (ax === 0 ? f[0] : f[1]);
+      for (const b of boxes.slice(1)) spans.push([orig + b[ax], orig + b[ax + 3]]);
+    }
+    spans.sort((p, q) => p[0] - q[0]);
+    const lo = Math.min.apply(null, spans.map((v) => v[0]));
+    const hi = Math.max.apply(null, spans.map((v) => v[1]));
+    legs.push({
+      fc,
+      fx: f[0], fz: f[1],
+      atEnds: spans.every((v) => near(v[0], lo) || near(v[1], hi)),
+      twoEach: spans.filter((v) => near(v[0], lo)).length === 2 && spans.filter((v) => near(v[1], hi)).length === 2,
+      out: Math.abs(hi - lo)
+    });
+  }
+
+  return {
+    all, legs,
+    bedFull: s.isFullCube(bed),
+    stoneFull: s.isFullCube(stone),
+    stoneBoxes: s.blockBoxes(stone).length,
+    place: [0, Math.PI, Math.PI / 2, -Math.PI / 2].map((y) => bd.bedPlaceMeta(y).facing)
+  };
+})()`);
+
+const near916 = (n) => Math.abs(n - 0.5625) < 1e-9;
+const near316 = (n) => Math.abs(n - 0.1875) < 1e-9;
+const isLeg = (l) => near316(l[3] - l[0]) && near316(l[4] - l[1]) && near316(l[5] - l[2]);
+
+check('床不再是满格方块', shape.bedFull === false);
+check('普通方块仍然走满格快速路径', shape.stoneFull === true && shape.stoneBoxes === 1);
+check('每一半都是「床垫体 + 两条腿」三个盒子',
+  shape.all.every((x) => x.n === 3), shape.all.map((x) => x.n).join(','));
+check('床垫体：下沿 3/16、顶面 9/16（悬空在腿上）',
+  shape.all.every((x) => near316(x.mattress[1]) && near916(x.mattress[4])));
+check('床垫体铺满整格（长宽都是 1，2 格长的每一格都铺满）',
+  shape.all.every((x) => x.mattress[0] === 0 && x.mattress[2] === 0 && x.mattress[3] === 1 && x.mattress[5] === 1));
+check('判定箱 = 9/16 高的整底盒子（原版 BlockBed.SHAPE）',
+  shape.all.every((x) => x.collide[0] === 0 && x.collide[1] === 0 && x.collide[2] === 0 &&
+    x.collide[3] === 1 && near916(x.collide[4]) && x.collide[5] === 1));
+check('外观包围盒也正好是 [0,0,0]-[1,9/16,1]',
+  shape.all.every((x) => x.bounds[0] === 0 && x.bounds[1] === 0 && x.bounds[2] === 0 &&
+    x.bounds[3] === 1 && near916(x.bounds[4]) && x.bounds[5] === 1));
+check('两条腿都是 3/16 的立方体、且顶面顶在床垫体下沿',
+  shape.all.every((x) => x.legs.length === 2 && x.legs.every((l) => isLeg(l) && l[4] === x.mattress[1])));
+check('两条腿在床轴的两个不同位置（不是并排在同一端）',
+  shape.all.every((x) => Math.abs(x.legs[0][0] - x.legs[1][0]) + Math.abs(x.legs[0][2] - x.legs[1][2]) > 0.5));
+check('四向朝向 × 两半：腿都只落在整张床的两个外端（中间不能多出柱子）',
+  shape.legs.every((x) => x.atEnds && x.twoEach),
+  shape.legs.map((x) => 'fc' + x.fc + (x.atEnds && x.twoEach ? ':ok' : ':BAD')).join(' '));
+check('整张床长 2 格', shape.legs.every((x) => Math.abs(x.out - 2) < 1e-9), shape.legs.map((x) => x.out).join(','));
+check('放置朝向映射：yaw 0/PI/PI2/-PI2 -> facing 0/1/2/3',
+  shape.place.join(',') === '0,1,2,3', shape.place.join(','));
+
 // ---- B 床合成表存在（3 羊毛 + 3 木板）----
 const recipe = await ev(`(async function(){
   const c = await import('/js/crafting.js');
