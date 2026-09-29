@@ -82,6 +82,7 @@ await sleep(2500);
 const placed = await ev(`(async function(){
   const g = window.game;
   const mod = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
   const idOf = function(k){ const b = mod.BLOCKS.find(function(b){ return b.key === k; }); return b ? b.id : -1; };
   const keys = ${JSON.stringify(KEYS)};
   const ids = keys.map(idOf);
@@ -94,8 +95,14 @@ const placed = await ev(`(async function(){
   const rowZ = bz0, wallZ = bz0 + 1;
   const n = keys.length;
   const SP = ${SPACING};
-  const x0 = bx0, x1 = bx0 + (n - 1) * SP;
-  const rowW = (n - 1) * SP;
+  // 床是**两格**的（床尾 + 床头），得给它留两个位置，否则床头会跟隔壁方块抢格子。
+  // 摆的时候让床轴沿 x（朝东 → 床头在 +x），机位在 -z 侧正对，这样看到的是床的长边。
+  const cols = keys.map(function(k){ return k === 'bed' ? 2 * SP : SP; });
+  const xs = [];
+  let acc = 0;
+  for (let i = 0; i < n; i++) { xs.push(bx0 + acc); acc += cols[i]; }
+  const x0 = bx0, x1 = bx0 + acc - SP;
+  const rowW = x1 - x0;
   // 机位：把这一排框满画面为准。0.62 系数太保守 —— 12 个方块只占四成宽，
   // 下面还压着一大片空地面，方块本身小得看不清贴图。
   const dist = rowW * 0.38 + 2.5;
@@ -121,7 +128,15 @@ const placed = await ev(`(async function(){
     g.world.setBlock(x, floor + 2, wallZ, stone);
     g.world.setBlock(x, floor + 3, wallZ, stone);
   }
-  for (let i = 0; i < n; i++) if (ids[i] >= 0) g.world.setBlock(x0 + i * SP, floor + 1, rowZ, ids[i]);
+  for (let i = 0; i < n; i++) {
+    if (ids[i] < 0) continue;
+    if (keys[i] === 'bed') {
+      g.world.setBlock(xs[i], floor + 1, rowZ, ids[i], bd.bedMeta(3, false));      // 朝东 + 床尾
+      g.world.setBlock(xs[i] + SP, floor + 1, rowZ, ids[i], bd.bedMeta(3, true));  // 朝东 + 床头
+    } else {
+      g.world.setBlock(xs[i], floor + 1, rowZ, ids[i]);
+    }
+  }
 
   const cx = x0 + rowW / 2;
   const cp = Math.cos(${EYE_PITCH});
