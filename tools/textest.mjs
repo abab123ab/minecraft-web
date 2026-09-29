@@ -524,11 +524,16 @@ check('四足动物身子是横躺的（长比高 ' + walkable.map((m) => m.t + 
 // 的方块，四个侧面全长一个样。熔炉原版就一个炉门，这里曾经四面都是炉门。
 // 方块可以用 faces 表按方向覆盖单面，这条断言直接去建出来的几何里量：
 // 把一个孤零零的熔炉丢进空区块，六个面各取哪张图，一个个认出来。
-const faceTiles = await ev(`(async function(){
+//
+// 几何会落进哪一路批次得自己挑（mesher 按 liquid / cutout / transparent 分流）：
+// 熔炉走不透明批次，床走镂空批次（cutout，留给光照用），火把走镂空批次、水走水批次。
+// 以前这里写死读 .opaque，于是换床过来量的时候一个面都取不到（床不在那个桶里）。
+async function faceTilesOf(key) {
+  return ev(`(async function(){
   const { BLOCKS } = await import('/js/blocks.js');
   const { buildSectionBatches } = await import('/js/mesher.js');
   const { TILE_NAMES, ATLAS_COLS } = await import('/js/textures.js');
-  const FID = BLOCKS.find(function(b){ return b.key === 'furnace'; }).id;
+  const FID = BLOCKS.find(function(b){ return b.key === '${key}'; }).id;
   const HEIGHT = 80, CHUNK = 16;
   const vol = CHUNK * CHUNK * HEIGHT;
   const ch = {
@@ -539,7 +544,12 @@ const faceTiles = await ev(`(async function(){
   };
   const bx = 4, by = 40, bz = 4;
   ch.data[bx + CHUNK * (bz + CHUNK * by)] = FID;
-  const buf = buildSectionBatches(ch, 2, { getChunk: function(){ return ch; }, useAO: false }).opaque;
+  const batches = buildSectionBatches(ch, 2, { getChunk: function(){ return ch; }, useAO: false });
+  // 这个方块只建了一组面，所以「有顶点的那一路」就是它 —— 不用去猜走哪条分支。
+  const PICK = ['opaque', 'cutout', 'glass', 'water']
+    .filter(function (k) { return batches[k].pos.length > 0; });
+  if (PICK.length !== 1) return { __bad: '面落进 ' + PICK.length + ' 路批次：' + PICK.join(',') };
+  const buf = batches[PICK[0]];
 
   // 顶点按「四个一组」切成面，每个面里那个恒定的坐标轴就是它的法线方向。
   // 不能按「顶点碰到了 bx/bx+1」来判断方向 —— 每个面的顶点都同时落在两面墙上。
@@ -557,10 +567,15 @@ const faceTiles = await ev(`(async function(){
     const key = axis < 0 ? 'other' : NAMES[axis * 2 + (val === org[axis] ? 1 : 0)];
     const f = out[key] || (out[key] = { n: 0, u: 9, v: 9 });
     f.n++;
+    let zmin = 1e9, zmax = -1e9;
     for (let k = 0; k < 4; k++) {
       const j = (base / 3 + k) * 2;
       if (buf.uv[j] < f.u) f.u = buf.uv[j];
       if (buf.uv[j + 1] < f.v) f.v = buf.uv[j + 1];
+      // 顺手记下「最靠 -z 那个顶点」和「最靠 +z 那个顶点」各自的 u ——
+      // 床头在哪一端，只有靠这两个数才能从几何里推出来。
+      if (p[k][2] < zmin) { zmin = p[k][2]; f.uMinZ = buf.uv[j]; }
+      if (p[k][2] > zmax) { zmax = p[k][2]; f.uMaxZ = buf.uv[j]; }
     }
   }
   const s = 1 / ATLAS_COLS;
@@ -569,9 +584,15 @@ const faceTiles = await ev(`(async function(){
     const col = Math.round(f.u / s);
     const row = Math.round((1 - f.v) / s) - 1;
     f.tile = TILE_NAMES[row * ATLAS_COLS + col];
+    // 换成本图块内部的坐标：0 = 本面 u 的起点，1 = 终点。
+    f.headU = (f.uMinZ - col * s) / s;
+    f.tailU = (f.uMaxZ - col * s) / s;
   }
+  out.batch = PICK[0];
   return out;
 })()`);
+}
+const faceTiles = await faceTilesOf('furnace');
 
 const sides = ['px', 'nx', 'pz', 'nz'].map((k) => faceTiles[k] && faceTiles[k].tile);
 const doorCount = sides.filter((t) => t === 'furnace_front').length;
@@ -584,6 +605,123 @@ check('熔炉顶面是 furnace_top、底面是 furnace_side',
   (faceTiles.py && faceTiles.py.tile) + ' / ' + (faceTiles.ny && faceTiles.ny.tile));
 check('熔炉另外三个侧面是 furnace_side（' + sides.filter((t) => t === 'furnace_side').length + ' 面）',
   sides.filter((t) => t === 'furnace_side').length === 3, JSON.stringify(sides));
+
+// ---- C4 床：四个侧面不能再长得一模一样 ----
+//
+// 床以前只有一张 side 贴图、六个面全用它，于是四个侧面每一面都在同一个位置有床头板，
+// 分不出床头床尾。现在 tiles 给顶/侧/底，faces 再把四面各指过去。
+// 其中两面长边用的必须是**互为镜像**的两张图：px 面的 u 朝 -z 走、nx 面朝 +z，
+// 同一个方向铺同一张图的话，床头板会跑到物理上相反的两端去。
+const bedFaces = await faceTilesOf('bed');
+const bedSides = ['px', 'nx', 'pz', 'nz'].map((k) => bedFaces[k] && bedFaces[k].tile);
+check('床四个侧面用的是四张不同的图（实测 ' + new Set(bedSides).size + ' 种）',
+  new Set(bedSides).size === 4 && bedSides.every((t) => t), JSON.stringify(bedSides));
+check('床顶面是 bed_top、底面是 bed_bottom',
+  bedFaces.py && bedFaces.py.tile === 'bed_top' && bedFaces.ny && bedFaces.ny.tile === 'bed_bottom',
+  (bedFaces.py && bedFaces.py.tile) + ' / ' + (bedFaces.ny && bedFaces.ny.tile));
+check('床的床头在 -z、床尾在 +z（nz/pz 各是哪一张）',
+  bedFaces.nz && bedFaces.nz.tile === 'bed_head' && bedFaces.pz && bedFaces.pz.tile === 'bed_foot',
+  (bedFaces.nz && bedFaces.nz.tile) + ' / ' + (bedFaces.pz && bedFaces.pz.tile));
+// 床是实心的方块，但贴图全不透明 —— 那它为什么在镂空批次里？因为 lighting.js 拿
+// cutout 当「透光、每层扣 1 级」用（原版床就是透光的）。这条盯住这个决定：
+// 真把它挪回不透明批次的话，床会变成一块完全不透光的实心板。
+check('床走的是镂空批次（cutout，为了透光；实测 ' + bedFaces.batch + '）',
+  bedFaces.batch === 'cutout', String(bedFaces.batch));
+
+// 两张长边贴图必须真的互为镜像：把 A 第 x 列和 B 第 15-x 列对起来比
+const mirrorBad = await ev(`(async function(){
+  function load(src) {
+    return new Promise(function (res, rej) {
+      var im = new Image();
+      im.onload = function () { res(im); };
+      im.onerror = rej;
+      im.src = src;
+    });
+  }
+  var imgs = await Promise.all([load('textures/block/bed.png'), load('textures/block/bed_side2.png')]);
+  var cv = document.createElement('canvas');
+  cv.width = 16; cv.height = 16;
+  var ctx = cv.getContext('2d');
+  function read(im) {
+    ctx.clearRect(0, 0, 16, 16);
+    ctx.drawImage(im, 0, 0);
+    return ctx.getImageData(0, 0, 16, 16).data;
+  }
+  var A = read(imgs[0]), B = read(imgs[1]);
+  var bad = 0;
+  for (var y = 0; y < 16; y++) for (var x = 0; x < 16; x++) {
+    var i = (y * 16 + x) * 4, j = (y * 16 + (15 - x)) * 4;
+    if (A[i] !== B[j] || A[i + 1] !== B[j + 1] || A[i + 2] !== B[j + 2]) bad++;
+  }
+  return bad;
+})()`);
+check('两张长边贴图互为镜像（对不上的像素 ' + mirrorBad + ' 个）', mirrorBad === 0);
+
+// 镜像这条是对称的 —— 把 px/nx 两张图整体调个头它照样过，可床头就跑到床尾去了。
+// 所以再量一次朝向：床的两条长边都得把枕头放在靠 -z 那一端。
+// 做法是从几何里把「最靠 -z 那个顶点」的局部 u 取出来（headU），从那一端往里挪
+// 30% 再取贴图像素 —— 正好错开角落上的床头立柱，落到枕头那一片上。
+const pillow = await ev(`(async function(){
+  function load(src) {
+    return new Promise(function (res, rej) {
+      var im = new Image();
+      im.onload = function () { res(im); };
+      im.onerror = rej;
+      im.src = src;
+    });
+  }
+  var spec = ${JSON.stringify([
+    { face: 'px', tile: bedFaces.px.tile, headU: bedFaces.px.headU },
+    { face: 'nx', tile: bedFaces.nx.tile, headU: bedFaces.nx.headU }
+  ])};
+  var out = [];
+  for (var i = 0; i < spec.length; i++) {
+    var s = spec[i];
+    var im = await load('textures/block/' + s.tile + '.png');
+    var cv = document.createElement('canvas');
+    cv.width = 16; cv.height = 16;
+    var cx = cv.getContext('2d');
+    cx.drawImage(im, 0, 0);
+    var d = cx.getImageData(0, 0, 16, 16).data;
+    var u = s.headU < 0.5 ? s.headU + 0.30 : s.headU - 0.30;
+    var x = Math.max(0, Math.min(15, Math.round(u * 16 - 0.5)));
+    var white = 0;
+    for (var y = 0; y < 3; y++) {
+      var k = (y * 16 + x) * 4;
+      if (d[k] > 200 && d[k + 1] > 200 && d[k + 2] > 200) white++;
+    }
+    out.push({ face: s.face, tile: s.tile, headU: +s.headU.toFixed(2), x: x, white: white });
+  }
+  return out;
+})()`);
+// 枕头三行全是白的才算数：只有前三行都是亮色（>200）才说明取到的是枕头，
+// 取到被子（红）或床头板（深木）都过不了。
+check('床两条长边都把枕头放在 -z 那一端（各取 3 个像素全白）',
+  pillow.every((p) => p.white === 3) && pillow.length === 2, JSON.stringify(pillow));
+
+// 上面这些只盯住了熔炉和床。贴图名写错才是最容易发生又最看不出来的事：
+// textures.js 的查表查不到就退到第 0 格（mesher 里 `ti === undefined ? 0 : ti`），
+// 于是方块不会报错、也不会缺面，只是安静地糊上另一张图。
+// 所以这里把所有方块的 tiles 和 faces 全部过一遍。
+const orphanTiles = await ev(`(async function(){
+  const { BLOCKS } = await import('/js/blocks.js');
+  const { TILE_INDEX } = await import('/js/textures.js');
+  const bad = [];
+  for (let i = 0; i < BLOCKS.length; i++) {
+    const b = BLOCKS[i];
+    if (!b || !b.key) continue;
+    const names = [];
+    if (b.tiles) names.push.apply(names, b.tiles);
+    if (b.faces) for (const k in b.faces) names.push(b.faces[k]);
+    for (const n of names) {
+      if (n === undefined || n === null) bad.push(b.key + ': 空');
+      else if (TILE_INDEX[n] === undefined) bad.push(b.key + ' → ' + n);
+    }
+  }
+  return bad;
+})()`);
+check('每个方块用到的贴图名都在图集里（查不到的 ' + orphanTiles.length + ' 个）',
+  orphanTiles.length === 0, orphanTiles.slice(0, 6).join(' | '));
 
 // ---- D 单帧渲染不能报错 ----
 const renderErr = await ev(`(function(){

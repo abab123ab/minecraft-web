@@ -84,11 +84,17 @@ def('torch', {
   solid: false, opaque: false, transparent: true, drop: 'torch', light: 14, flat: true, sound: 'wood'
 });
 
-// bed.png 是「床的侧面图」：白枕头 + 红被子 + 木头床架。它的顶部三行是镂空的
-// （39/256 个像素全透明，RGB 是 0,0,0）—— 那是床垫上方的空间。
-// 当不透明方块画的话，alpha 被忽略，这三行就直接变成一条黑带糊在床顶上。
+// 床：六张分面贴图（tools/makebed.mjs 生成）。
+// 以前只有一张 side 图、六个面全用它 —— 四个侧面长得一模一样，每一面都在同一个位置
+// 有床头板，分不出床头床尾；顶面也是这张侧视图。现在 tiles 给顶/侧/底，
+// faces 再把四个侧面各指过去：床头板固定朝 -z（这张图没有朝向状态，放下去就是朝北）。
+// 注意 tiles[1] 同时是物品栏图标（items.js 取 tiles[1]），所以侧面那张仍叫 bed。
+//
+// cutout 保留：它现在不是因为贴图有透明像素（这六张全不透明），而是 lighting.js
+// 用这个标志表示「透光、每层扣 1 级」。去掉它床会变成完全不透光的实心块，那是另一件事。
 def('bed', {
-  label: '床', tiles: ['bed', 'bed', 'bed'],
+  label: '床', tiles: ['bed_top', 'bed', 'bed_bottom'],
+  faces: { px: 'bed_side2', nx: 'bed', pz: 'bed_foot', nz: 'bed_head' },
   hardness: 0.4, tool: null, tier: 0,
   solid: true, opaque: true, transparent: false, cutout: true, drop: 'bed', light: 0, sound: 'wood'
 });
