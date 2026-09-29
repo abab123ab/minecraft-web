@@ -107,11 +107,10 @@ def('torch', {
 //
 // meta 是一个字节：meta = part | (facing << 1)（part 0=床尾 1=床头；facing 0=北 1=南 2=西 3=东）。
 //
-// tiles/faces 还是旧的满格六面贴图 —— 物品栏图标取的是 tiles[1]（js/items.js），
-// 而渲染管线要等 mesher 支持多盒子 + faceFor/rotFor 之后才接管这两行。
+// tiles 只服务物品栏图标（js/items.js 取 tiles[0] 当顶面、tiles[1] 当两个侧面），
+// 世界里的六个面走 faceFor，不再需要 faces 表。
 def('bed', {
-  label: '床', tiles: ['bed_top', 'bed', 'bed_bottom'],
-  faces: { px: 'bed_side2', nx: 'bed', pz: 'bed_foot', nz: 'bed_head' },
+  label: '床', tiles: ['bed_top', 'bed_side', 'bed_bottom'],
   boxes: bedBoxes,
   collide: bedCollide,
   faceFor: bedFace,

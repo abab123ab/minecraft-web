@@ -44,11 +44,14 @@ const BLOCK_TILES = {
   crafting_top: 'crafting_table_top',
   crafting_side: 'crafting_table_side',
   torch: 'torch',
-  bed: 'bed',
+  bed_side: 'bed_side',
   bed_side2: 'bed_side2',
+  bed_side_head: 'bed_side_head',
+  bed_side_head2: 'bed_side_head2',
   bed_head: 'bed_head',
   bed_foot: 'bed_foot',
   bed_top: 'bed_top',
+  bed_top_head: 'bed_top_head',
   bed_bottom: 'bed_bottom'
 };
 

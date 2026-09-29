@@ -6,15 +6,18 @@ import { BLOCKS } from './blocks.js';
 // 谁要判断「这一格能不能站」就直接 isSolid(id)，谁要画方块就写死 0..1 的八个顶点。
 // 床要变成原版的 2 格长 × 9/16 高，就必须先把「形状」单独抽成一层。
 //
-// 盒子格式：[x0, y0, z0, x1, y1, z1]，单位是格（1 = 一整个方块），原点在方块自己的最小角。
-// 一个方块可以有多个盒子（床 = 床垫体 + 两条腿）。不填 = 满格。
+// 盒子项是 { box: [x0,y0,z0,x1,y1,z1], tile? }，单位是格（1 = 一整个方块），
+// 原点在方块自己的最小角。一个方块可以有多个盒子（床 = 床垫体 + 两条腿）。不填 = 满格。
+//
+// 盒子上带 tile 就用那一张（六面通用）—— 床腿靠这个走木纹。不带的话整块都跟着
+// 方块的 faceFor/faces/tiles 走，而 faceFor 是说「哪一面不建」的，套到腿上会让腿缺面。
 //
 // 方块可以声明这两样（见 blocks.js 的 def）：
 //   boxes(meta)   外观盒子表
 //   collide(meta) 判定箱。形状和碰撞可以分开 —— 原版床就是这样：判定箱是一个 9/16 高的
 //                 整底盒子，腿只是外观模型、不参与碰撞。不填 = 跟外观一样。
 
-export const FULL_BOX = [[0, 0, 0, 1, 1, 1]];
+export const FULL_BOX = [{ box: [0, 0, 0, 1, 1, 1] }];
 
 const boxCache = new Map();
 const colCache = new Map();
@@ -52,7 +55,8 @@ export function shapeBounds(id, meta) {
   if (r) return r;
   let x0 = Infinity, y0 = Infinity, z0 = Infinity;
   let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-  for (const b of blockBoxes(id, meta)) {
+  for (const item of blockBoxes(id, meta)) {
+    const b = item.box;
     if (b[0] < x0) x0 = b[0];
     if (b[1] < y0) y0 = b[1];
     if (b[2] < z0) z0 = b[2];

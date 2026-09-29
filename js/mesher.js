@@ -3,6 +3,7 @@ import { BLOCKS, AIR } from './blocks.js';
 import { tileUV, TILE_INDEX } from './textures.js';
 import { CHUNK, HEIGHT, SECTION } from './worlddef.js';
 import { B } from './worldgen.js';
+import { blockBoxes, isFullCube, FULL_BOX } from './shapes.js';
 
 const FACES = [
   {
@@ -35,6 +36,16 @@ const CORNER_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 
 function solidForAO(id) {
   return BLOCKS[id].opaque;
+}
+
+// 顶点该到贴图上采哪个 uv。r 是 90° 的圈数（0..3），方向跟 bedshape.js 的 bedRot
+// 对齐：让贴图的「上」（v 增大）指向床头。
+// 顶面基准是 u = x、v = 1-z，所以 L=+x → 3、L=+z → 2、L=-x → 1、L=-z → 0。
+function rotUV(u, v, r) {
+  if (r === 1) return [v, 1 - u];
+  if (r === 2) return [1 - u, 1 - v];
+  if (r === 3) return [1 - v, u];
+  return [u, v];
 }
 
 export function buildSectionBatches(ch, si, ctx) {
@@ -72,17 +83,20 @@ export function buildSectionBatches(ch, si, ctx) {
   const glass = { pos: [], uv: [], col: [], idx: [] };
 
   const data = ch.data;
+  const metaArr = ch.meta;
 
   const yStart = si * SECTION, yEnd = yStart + SECTION;
 
   for (let y = yStart; y < yEnd; y++) {
     for (let z = 0; z < CHUNK; z++) {
       for (let x = 0; x < CHUNK; x++) {
-        const id = data[x + CHUNK * (z + CHUNK * y)];
+        const idx = x + CHUNK * (z + CHUNK * y);
+        const id = data[idx];
         if (id === AIR) continue;
         const block = BLOCKS[id];
         const tiles = block.tiles;
         if (!tiles) continue;
+        const meta = metaArr ? metaArr[idx] : 0;
 
         if (id === B.torch) {
           // 火把走镂空批次。它那张贴图 80% 是全透明像素（只有中间一条是木棍 + 火苗），
@@ -92,90 +106,115 @@ export function buildSectionBatches(ch, si, ctx) {
           continue;
         }
 
-        for (let f = 0; f < 6; f++) {
-          const face = FACES[f];
-          const nb = get(x + face.dir[0], y + face.dir[1], z + face.dir[2]);
-          const nbBlock = BLOCKS[nb];
-          // 同种方块贴在一起时中间那层不建面（玻璃除外：玻璃块的边框必须一块一块画出来）。
-          // 树叶也算 opaque，所以这里天然走「不建面」这条 —— 一片树冠只有外壳有面。
-          // 把树叶也放进这条例外里试过，树冠内部 6 面全建，镂空面数直接超过整个地形。
-          if (nbBlock.opaque && !(nb === id && block.transparent)) continue;
-          if (block.liquid) {
-            if (nb === id) continue;
-            if (face.dir[1] === -1) continue;
-            if (face.dir[1] === 1 && nb !== AIR) continue;
-          }
+        // 一个方块可以不止一个盒子（床 = 床垫体 + 两条腿），逐个建面。
+        const boxes = blockBoxes(id, meta);
+        // AO 的采样点是按「整格」算的，小盒子（床垫、床腿）用它会取到隔壁格的遮挡，
+        // 跟它自己那点体积对不上 —— 所以只有满格方块收 AO。
+        const useAO = ctx.useAO && boxes === FULL_BOX;
+        const aboveAir = get(x, y + 1, z) === AIR;
+        const waterTop = block.liquid && aboveAir ? 0.875 : 1;
 
-          const target = block.liquid ? water
-            : (block.cutout ? cutout : (block.transparent ? glass : opaque));
-          // tiles 是 [顶, 侧面, 底] —— 四个侧面共用同一张。熔炉的炉门只该在一面，
-          // 所以方块还可以用 faces 表按方向覆盖单面（px/nx/py/ny/pz/nz）。
-          // 注意侧面那张同时是物品栏图标（items.js 取 tiles[1]），所以别去改 tiles。
-          const override = block.faces ? block.faces[face.key] : null;
-          const tileName = override || tiles[face.tile];
-          const ti = TILE_INDEX[tileName];
-          const uvR = tileUV(ti === undefined ? 0 : ti);
+        for (let bi = 0; bi < boxes.length; bi++) {
+          const item = boxes[bi];
+          const box = item.box;
+          const bx0 = box[0], by0 = box[1], bz0 = box[2];
+          const sx = box[3] - box[0], sy = box[4] - box[1], sz = box[5] - box[2];
 
-          const base = target.pos.length / 3;
-          const ao = [0, 0, 0, 0];
-          const aboveAir = get(x, y + 1, z) === AIR;
-          const waterTop = block.liquid && aboveAir ? 0.875 : 1;
-
-          const ndx = x + face.dir[0], ndy = y + face.dir[1], ndz = z + face.dir[2];
-          const skyL = skyAt(ndx, ndy, ndz);
-          const litL = litAt(ndx, ndy, ndz);
-          // 天光与方块光取较大者，不能相加：相加会让 lv 超过 1，
-          // r/g 先被 min(1,...) 截断而 b 不会，火把区就会由暖色反转成冷色，同时整体双重计亮。
-          let lv = Math.max(skyL, litL) / 15;
-          if (lv < 0.30) lv = 0.30;
-          const warm = Math.max(0, litL - skyL) / 15;
-          const cr = Math.min(1, lv + warm * 0.18);
-          const cg = Math.min(1, lv + warm * 0.06);
-          const cb = Math.max(0, lv - warm * 0.06);
-
-          for (let v = 0; v < 4; v++) {
-            const vtx = face.verts[v];
-            const uvs = face.uvs[v];
-            const sign = CORNER_SIGNS[v];
-            const px = x + vtx[0];
-            const py = y + vtx[1] * waterTop;
-            const pz = z + vtx[2];
-
-            let aoLevel = 3;
-            if (ctx.useAO) {
-              const s1 = solidForAO(get(
-                x + face.dir[0] + face.uAxis[0] * sign[0],
-                y + face.dir[1] + face.uAxis[1] * sign[0],
-                z + face.dir[2] + face.uAxis[2] * sign[0]
-              )) ? 1 : 0;
-              const s2 = solidForAO(get(
-                x + face.dir[0] + face.vAxis[0] * sign[1],
-                y + face.dir[1] + face.vAxis[1] * sign[1],
-                z + face.dir[2] + face.vAxis[2] * sign[1]
-              )) ? 1 : 0;
-              const cnr = solidForAO(get(
-                x + face.dir[0] + face.uAxis[0] * sign[0] + face.vAxis[0] * sign[1],
-                y + face.dir[1] + face.uAxis[1] * sign[0] + face.vAxis[1] * sign[1],
-                z + face.dir[2] + face.uAxis[2] * sign[0] + face.vAxis[2] * sign[1]
-              )) ? 1 : 0;
-              aoLevel = (s1 && s2) ? 0 : 3 - (s1 + s2 + cnr);
+          for (let f = 0; f < 6; f++) {
+            const face = FACES[f];
+            const ndx = x + face.dir[0], ndy = y + face.dir[1], ndz = z + face.dir[2];
+            const nb = get(ndx, ndy, ndz);
+            // 邻居得「整格实心」才挡得住这一面 —— 这里不能只看 opaque：床也是不透明的，
+            // 但它只有 9/16 高，旁边的石头要是因为「邻居不透明」就整面不建，石头上半截会露出一个洞。
+            // 同种方块贴在一起时中间那层也不建面（玻璃除外：玻璃块的边框必须一块一块画出来）。
+            // 树叶算满格实心，所以这里天然走「不建面」这条 —— 一片树冠只有外壳有面。
+            // 把树叶也放进这条例外里试过，树冠内部 6 面全建，镂空面数直接超过整个地形。
+            if (isFullCube(nb) && !(nb === id && block.transparent)) continue;
+            if (block.liquid) {
+              if (nb === id) continue;
+              if (face.dir[1] === -1) continue;
+              if (face.dir[1] === 1 && nb !== AIR) continue;
             }
-            ao[v] = aoLevel;
 
-            const aof = 0.55 + 0.15 * ao[v];
-            const shade = face.shade * aof;
-            target.pos.push(px, py, pz);
-            target.uv.push(
-              uvR.u0 + (uvR.u1 - uvR.u0) * uvs[0],
-              uvR.v0 + (uvR.v1 - uvR.v0) * uvs[1]
-            );
-            target.col.push(cr * shade, cg * shade, cb * shade);
-          }
+            const target = block.liquid ? water
+              : (block.cutout ? cutout : (block.transparent ? glass : opaque));
+            // 贴图：盒子自带的 tile（床腿）> faceFor（床垫按朝向和床头/床尾选图，
+            // 返回 null 表示这一面根本不建）> faces（熔炉炉门那种按方向覆盖）> tiles（顶/侧/底）。
+            // 注意 tiles[1] 同时是物品栏图标（items.js 取它），所以别去改 tiles。
+            let tileName;
+            if (item.tile) {
+              tileName = item.tile;
+            } else if (block.faceFor) {
+              tileName = block.faceFor(meta, face.key);
+              if (tileName === null) continue;
+            } else {
+              const override = block.faces ? block.faces[face.key] : null;
+              tileName = override || tiles[face.tile];
+            }
+            const ti = TILE_INDEX[tileName];
+            const uvR = tileUV(ti === undefined ? 0 : ti);
+            const rot = block.rotFor ? block.rotFor(meta, face.key) : 0;
 
-          if (ao[0] + ao[2] > ao[1] + ao[3]) {
-            target.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-          } else {
-            target.idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
+            const base = target.pos.length / 3;
+            const ao = [0, 0, 0, 0];
+
+            const skyL = skyAt(ndx, ndy, ndz);
+            const litL = litAt(ndx, ndy, ndz);
+            // 天光与方块光取较大者，不能相加：相加会让 lv 超过 1，
+            // r/g 先被 min(1,...) 截断而 b 不会，火把区就会由暖色反转成冷色，同时整体双重计亮。
+            let lv = Math.max(skyL, litL) / 15;
+            if (lv < 0.30) lv = 0.30;
+            const warm = Math.max(0, litL - skyL) / 15;
+            const cr = Math.min(1, lv + warm * 0.18);
+            const cg = Math.min(1, lv + warm * 0.06);
+            const cb = Math.max(0, lv - warm * 0.06);
+
+            for (let v = 0; v < 4; v++) {
+              const vtx = face.verts[v];
+              const sign = CORNER_SIGNS[v];
+              // 盒子就是把单位立方体的顶点按盒子的范围缩放一下。vtx 只取 0 或 1，
+              // 所以是纯线性插值 —— 满格盒子 [0,0,0,1,1,1] 算出来跟以前逐位相同。
+              const px = x + bx0 + vtx[0] * sx;
+              const py = y + by0 + vtx[1] * sy * waterTop;
+              const pz = z + bz0 + vtx[2] * sz;
+
+              let aoLevel = 3;
+              if (useAO) {
+                const s1 = solidForAO(get(
+                  ndx + face.uAxis[0] * sign[0],
+                  ndy + face.uAxis[1] * sign[0],
+                  ndz + face.uAxis[2] * sign[0]
+                )) ? 1 : 0;
+                const s2 = solidForAO(get(
+                  ndx + face.vAxis[0] * sign[1],
+                  ndy + face.vAxis[1] * sign[1],
+                  ndz + face.vAxis[2] * sign[1]
+                )) ? 1 : 0;
+                const cnr = solidForAO(get(
+                  ndx + face.uAxis[0] * sign[0] + face.vAxis[0] * sign[1],
+                  ndy + face.uAxis[1] * sign[0] + face.vAxis[1] * sign[1],
+                  ndz + face.uAxis[2] * sign[0] + face.vAxis[2] * sign[1]
+                )) ? 1 : 0;
+                aoLevel = (s1 && s2) ? 0 : 3 - (s1 + s2 + cnr);
+              }
+              ao[v] = aoLevel;
+
+              const aof = 0.55 + 0.15 * ao[v];
+              const shade = face.shade * aof;
+              const tuv = rotUV(face.uvs[v][0], face.uvs[v][1], rot);
+              target.pos.push(px, py, pz);
+              target.uv.push(
+                uvR.u0 + (uvR.u1 - uvR.u0) * tuv[0],
+                uvR.v0 + (uvR.v1 - uvR.v0) * tuv[1]
+              );
+              target.col.push(cr * shade, cg * shade, cb * shade);
+            }
+
+            if (ao[0] + ao[2] > ao[1] + ao[3]) {
+              target.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            } else {
+              target.idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
+            }
           }
         }
       }

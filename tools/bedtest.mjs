@@ -135,13 +135,13 @@ const shape = await ev(`(async function(){
   for (let fc = 0; fc < 4; fc++) {
     for (const head of [false, true]) {
       const mm = meta(fc, head);
-      const boxes = s.blockBoxes(bed, mm);
+      const boxes = s.blockBoxes(bed, mm).map((o) => o.box);
       all.push({
         fc, head,
         n: boxes.length,
         mattress: boxes[0],
         legs: boxes.slice(1),
-        collide: s.blockCollide(bed, mm)[0],
+        collide: s.blockCollide(bed, mm)[0].box,
         bounds: s.shapeBounds(bed, mm)
       });
     }
@@ -155,7 +155,7 @@ const shape = await ev(`(async function(){
     const ax = f[0] !== 0 ? 0 : 2;
     const spans = [];
     for (let i = 0; i < 2; i++) {
-      const boxes = s.blockBoxes(bed, meta(fc, i === 1));
+      const boxes = s.blockBoxes(bed, meta(fc, i === 1)).map((o) => o.box);
       const orig = i === 0 ? 0 : (ax === 0 ? f[0] : f[1]);
       for (const b of boxes.slice(1)) spans.push([orig + b[ax], orig + b[ax + 3]]);
     }

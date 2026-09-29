@@ -30,8 +30,10 @@ export const bedIsHead = (meta) => (meta & 1) === 1;
 export const bedMeta = (facing, head) => ((facing & 3) << 1) | (head ? 1 : 0);
 
 // 判定箱：一个整底盒子，9/16 高。跟腿无关。
+export const BED_LEG_TILE = 'bed_bottom';
+
 export function bedCollide() {
-  return [[0, 0, 0, 1, BED_H, 1]];
+  return [{ box: [0, 0, 0, 1, BED_H, 1] }];
 }
 
 // 外观：床垫体 + 两条腿。
@@ -48,12 +50,12 @@ export function bedBoxes(meta) {
   const near1 = (bedIsHead(meta) ? fAxis : -fAxis) > 0;
   const a0 = near1 ? 1 - BED_LEG : 0;
   const a1 = near1 ? 1 : BED_LEG;
-  const boxes = [[0, BED_BODY_Y0, 0, 1, BED_H, 1]];
+  const boxes = [{ box: [0, BED_BODY_Y0, 0, 1, BED_H, 1] }];
   for (const p of [0, 1 - BED_LEG]) {
     const b = [0, 0, 0, 1, BED_LEG, 1];
     b[ax] = a0; b[ax + 3] = a1;
     b[perp] = p; b[perp + 3] = p + BED_LEG;
-    boxes.push(b);
+    boxes.push({ box: b, tile: BED_LEG_TILE });
   }
   return boxes;
 }
