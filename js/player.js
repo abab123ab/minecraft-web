@@ -1,10 +1,18 @@
 import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
+import { boxHitsBlock } from './shapes.js';
 import { HEIGHT } from './worlddef.js';
 
 export const P_WIDTH = 0.6;
 export const P_HEIGHT = 1.8;
 export const P_EYE = 1.62;
+
+// 原版玩家的步高：撞到坎就自动抬腿上去（0.6 格）。床是 9/16 = 0.5625，所以能直接走上去。
+const STEP_UP = 0.6;
+// 抬腿的采样粒度：0.1 一格，最多抬 6 次。抬起来之后靠重力落回台阶面，所以粗一点也看不出来。
+const STEP_SAMPLES = 6;
+// 判「脚底有支撑」的容差：抬腿不可能正好落在台阶面上，差这一点点也算踩住了。
+const GROUND_TOL = 0.12;
 
 const GRAVITY = 28;
 const JUMP_VEL = 8.4;
@@ -63,7 +71,11 @@ export class Player {
       if (y < 0 || y >= HEIGHT) continue;
       for (let z = z0; z <= z1; z++) {
         for (let x = x0; x <= x1; x++) {
-          if (isSolid(this.world.getBlock(x, y, z))) return true;
+          const id = this.world.getBlock(x, y, z);
+          if (!isSolid(id)) continue;
+          // 按方块的判定箱比，不能只问「这格是不是实心」：床是 9/16 高的实心块，
+          // 只问 isSolid 的话贴着床走会走不进去、站上去又会被床垫顶起来。
+          if (boxHitsBlock(b, x, y, z, id, this.world.getMeta(x, y, z))) return true;
         }
       }
     }
@@ -191,15 +203,39 @@ export class Player {
     if (amount === 0) return;
     const old = this.pos[axis];
     this.pos[axis] += amount;
-    if (this.collides()) {
-      this.pos[axis] = old;
-      if (vertical) {
-        if (amount < 0) this.onGround = true;
-        this.vel.y = 0;
-      } else {
-        this.vel[axis] = 0;
-      }
+    if (!this.collides()) return;
+    // 水平方向被挡住时先试试抬腿（原版步高 0.6）：抬起来之后这个方向不撞、
+    // 而且脚底马上有东西接着，就顺着走上去 —— 台阶、床沿都是这么上去的。
+    // 抬不上去才真的挡住。竖直方向不抬（否则会顺着墙往上爬）。
+    if (!vertical && !this.flying && this.onGround && this.stepUp()) return;
+    this.pos[axis] = old;
+    if (vertical) {
+      if (amount < 0) this.onGround = true;
+      this.vel.y = 0;
+    } else {
+      this.vel[axis] = 0;
     }
+  }
+
+  stepUp() {
+    const y0 = this.pos.y;
+    for (let i = 1; i <= STEP_SAMPLES; i++) {
+      this.pos.y = y0 + (STEP_UP * i) / STEP_SAMPLES;
+      if (!this.collides() && this.groundAt(this.pos.y)) return true;
+    }
+    this.pos.y = y0;
+    return false;
+  }
+
+  // 脚底往下 GROUND_TOL 这么一段里有没有东西撑着。抬腿之后不能凭空往上挪，
+  // 否则撞墙的时候会被一路抬到天上。
+  groundAt(y) {
+    const h = P_WIDTH / 2;
+    return this.collides({
+      minX: this.pos.x - h, maxX: this.pos.x + h,
+      minY: y - GROUND_TOL, maxY: y + 1e-4,
+      minZ: this.pos.z - h, maxZ: this.pos.z + h
+    });
   }
 
   look(dx, dy, sensitivity) {

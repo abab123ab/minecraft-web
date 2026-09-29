@@ -1,4 +1,4 @@
-import { BLOCKS } from './blocks.js';
+import { BLOCKS, isSolid } from './blocks.js';
 
 // 方块形状层。
 //
@@ -75,4 +75,38 @@ export function shapeBounds(id, meta) {
 export function isFullCube(id) {
   const b = BLOCKS[id];
   return !!b.opaque && !b.boxes;
+}
+
+// 世界坐标下的一个 AABB 跟 (bx,by,bz) 这一格的**判定箱**是否相交。
+// b 是 {minX,maxX,minY,maxY,minZ,maxZ}。
+//
+// 为什么不能只问 isSolid：床只有 9/16 高，只问「这格是实心吗」的话，
+// 走路时会被床前面那一层空气挡住（贴着床走不进去），站上去又会被床垫顶起来。
+export function boxHitsBlock(b, bx, by, bz, id, meta) {
+  const def = BLOCKS[id];
+  // 没声明形状 = 满格，直接算撞上。绝大多数方块走这条，别为它们建数组。
+  if (!def.boxes && !def.collide) return true;
+  for (const item of blockCollide(id, meta)) {
+    const s = item.box;
+    if (b.maxX > bx + s[0] && b.minX < bx + s[3] &&
+        b.maxY > by + s[1] && b.minY < by + s[4] &&
+        b.maxZ > bz + s[2] && b.minZ < bz + s[5]) return true;
+  }
+  return false;
+}
+
+// 按点采样共用一个盒子对象，别在每帧的热路径里造垃圾。
+const POINT_BOX = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+
+// 世界坐标点 (x,y,z) 是否落在某个实心方块的判定箱里。
+// 生物和掉落物是按点采样的（没有体积盒），这里让它们也认形状 —— 否则它们会
+// 直接穿过床那 9/16 的高度限制，踩在空气上走。
+export function pointHitsSolid(world, x, y, z) {
+  const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+  const id = world.getBlock(bx, by, bz);
+  if (!isSolid(id)) return false;
+  POINT_BOX.minX = POINT_BOX.maxX = x;
+  POINT_BOX.minY = POINT_BOX.maxY = y;
+  POINT_BOX.minZ = POINT_BOX.maxZ = z;
+  return boxHitsBlock(POINT_BOX, bx, by, bz, id, world.getMeta(bx, by, bz));
 }

@@ -1,6 +1,7 @@
 import * as THREE from './vendor/three.module.js';
 import { ITEMS, itemIconCanvas } from './items.js';
 import { isSolid } from './blocks.js';
+import { boxHitsBlock } from './shapes.js';
 import { HEIGHT } from './worlddef.js';
 
 const GRAVITY = 24;
@@ -117,13 +118,20 @@ export class DroppedItems {
 
   hitsSolid(p) {
     const r = 0.16;
-    const x0 = Math.floor(p.x - r), x1 = Math.floor(p.x + r);
-    const z0 = Math.floor(p.z - r), z1 = Math.floor(p.z + r);
-    const y0 = Math.floor(p.y), y1 = Math.floor(p.y + 0.3);
+    const box = { minX: p.x - r, maxX: p.x + r, minY: p.y, maxY: p.y + 0.3, minZ: p.z - r, maxZ: p.z + r };
+    const x0 = Math.floor(box.minX), x1 = Math.floor(box.maxX - 1e-6);
+    const z0 = Math.floor(box.minZ), z1 = Math.floor(box.maxZ - 1e-6);
+    const y0 = Math.floor(box.minY), y1 = Math.floor(box.maxY - 1e-6);
     for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= HEIGHT) continue;
       for (let z = z0; z <= z1; z++) {
         for (let x = x0; x <= x1; x++) {
-          if (this.isSolidAt(x, y, z)) return true;
+          const id = this.world.getBlock(x, y, z);
+          if (!isSolid(id)) continue;
+          // 掉落物的移动也按判定箱比：床只有 9/16 高，从旁边滚过去应该蹭着床垫走，
+          // 而不是被整格挡住、也不是穿过去。
+          // （静止高度那套还是按整格算的 —— 掉在床上的物品会稍微浮一点，先这样。）
+          if (boxHitsBlock(box, x, y, z, id, this.world.getMeta(x, y, z))) return true;
         }
       }
     }

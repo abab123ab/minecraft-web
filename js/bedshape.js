@@ -64,6 +64,15 @@ export function bedBoxes(meta) {
 const SIDE_N = { px: [1, 0], nx: [-1, 0], pz: [0, 1], nz: [0, -1] };
 const SIDE_U = { px: [0, -1], nx: [0, 1], pz: [1, 0], nz: [-1, 0] };
 
+// 另一半在哪（相对本格的偏移）。整张床只有两格，所以另一半永远在床轴的另一侧：
+// 床尾格的另一半在 +facing，床头格的另一半在 -facing。
+// 破坏、睡觉、以及「两格一起消失」都靠这个找对面那一格。
+export function bedPartner(meta) {
+  const f = bedFacing(meta);
+  const s = bedIsHead(meta) ? -1 : 1;
+  return [f[0] * s, f[1] * s];
+}
+
 // 这一面用哪张贴图；返回 null 表示这一面根本不建。
 //
 // 端面：法线和床轴平行。朝床头那一侧只有「床头格」有面（床尾格的同侧贴着另一半，

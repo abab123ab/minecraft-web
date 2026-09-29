@@ -223,21 +223,32 @@ check('床合成配方已注册', recipe !== null);
 check('床配方为 3 羊毛 + 3 木板', recipe && recipe.wool === 3 && recipe.plank === 3 && recipe.count === 1, recipe);
 
 // ---- C 夜里右键床 → 睡觉 + 设重生点 + 黑屏遮罩 ----
+//
+// 床是两格一张，所以这里摆**完整**的一张（床尾 + 床头），而且刻意点**床尾**那一格：
+// 重生点应该落到床头那一格、高度是床垫面（9/16），不是点哪格就重生在哪格。
 const night = await ev(`(async function(){
   const g = window.game;
   g.timeOfDay = 0.85; g.updateDayNight(0);
   const isNight = g.isNight;
   const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
   const bedId = m.BLOCK_BY_KEY.bed.id;
   const bx = Math.floor(g.player.pos.x) + 2, by = Math.floor(g.player.pos.y), bz = Math.floor(g.player.pos.z);
-  g.world.setBlock(bx, by, bz, bedId);
+  const footMeta = bd.bedMeta(1, false);   // 朝南 + 床尾
+  const headMeta = bd.bedMeta(1, true);    // 朝南 + 床头
+  g.world.setBlock(bx, by, bz, bedId, footMeta);
+  g.world.setBlock(bx, by, bz + 1, bedId, headMeta);
   const before = { x: g.spawnPoint.x, y: g.spawnPoint.y, z: g.spawnPoint.z };
-  g.trySleep({ x: bx, y: by, z: bz, ny: 1 });
+  g.trySleep({ x: bx, y: by, z: bz, ny: 1, id: bedId, meta: footMeta });
   const el = document.getElementById('sleep');
   return {
     isNight, placed: g.world.getBlock(bx, by, bz) === bedId,
-    sleeping: g.sleeping,
-    spawnOk: Math.abs(g.spawnPoint.x - (bx + 0.5)) < 1e-6 && Math.abs(g.spawnPoint.y - (by + 1)) < 1e-6 && Math.abs(g.spawnPoint.z - (bz + 0.5)) < 1e-6,
+    sleeping: g.sleeping, bedH: bd.BED_H,
+    // 床头那一格在 +z 侧（朝南），重生点该落在那里
+    spawnOk: Math.abs(g.spawnPoint.x - (bx + 0.5)) < 1e-6 &&
+             Math.abs(g.spawnPoint.y - (by + bd.BED_H)) < 1e-6 &&
+             Math.abs(g.spawnPoint.z - (bz + 1.5)) < 1e-6,
+    playerY: g.player.pos.y, wantY: by + bd.BED_H, by,
     overlayOn: el ? el.classList.contains('on') : false,
     before
   };
@@ -245,8 +256,29 @@ const night = await ev(`(async function(){
 check('0.85 时刻判定为夜晚', night.isNight === true);
 check('床方块已放置到世界', night.placed);
 check('右键床后进入睡眠状态', night.sleeping === true);
-check('重生点更新为床的位置', night.spawnOk);
+check('点床尾也能睡，重生点落到床头那一格、高度在床垫面（y + 9/16）', night.spawnOk,
+  'y=' + night.playerY + ' 期望=' + night.wantY);
+check('人站在床垫上，不是悬在整格顶（y 比整格顶低 7/16）', Math.abs(night.playerY - (night.by + 1)) > 0.4 && Math.abs(night.playerY - night.wantY) < 1e-6, 'y=' + night.playerY);
 check('黑屏遮罩 #sleep 已点亮', night.overlayOn === true);
+
+// ---- C1b 只有一半的床不算床，不给睡 ----
+const halfBed = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id;
+  g.timeOfDay = 0.85; g.updateDayNight(0);
+  g.sleeping = false;
+  const bx = Math.floor(g.player.pos.x) + 4, by = Math.floor(g.player.pos.y), bz = Math.floor(g.player.pos.z);
+  const footMeta = bd.bedMeta(1, false);
+  g.world.setBlock(bx, by, bz, bedId, footMeta);     // 只摆床尾，床头那格空着
+  g.trySleep({ x: bx, y: by, z: bz, ny: 1, id: bedId, meta: footMeta });
+  const sleeping = g.sleeping;
+  g.world.setBlock(bx, by, bz, 0);
+  g.sleeping = false;
+  return { sleeping };
+})()`);
+check('只有一半的床不给睡（对面那格不是床头就拒绝）', halfBed.sleeping === false, String(halfBed.sleeping));
 
 // ---- C2 方块状态字节（meta）：能存能取、射线带得出、改回去要归零 ----
 const metaTest = await ev(`(async function(){
@@ -318,6 +350,172 @@ check('存档版本升到 2', saveRound.ver === 2, String(saveRound.ver));
 check('存档里的编辑记录带着状态字节',
   saveRound.rec && saveRound.rec[0] === -1 && saveRound.rec[2] === 31 && saveRound.rec[3] === saveRound.meta,
   JSON.stringify(saveRound.rec) + ' 期望 meta=' + saveRound.meta);
+
+// ---- C4 摆放：一次放下两格，床头在「远离玩家」那一侧 ----
+//
+// 这段走**真的 useItem()**，不是直接 setBlock（直接摆等于没测摆放本身）。
+// 为了让准星能稳稳打到靶子，先在空中搭一块石台，玩家站上去、朝北平视。
+// 靶子是正前方 2 格处一根 1 格高的石柱：从眼睛（+1.62）往下看一点，正好落在它顶面上。
+// 按下右键后，床尾应该落在「靶子顶上那一格」，床头再往北（-z）一格 —— 也就是远离玩家那侧。
+const place = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const it = await import('/js/items.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const bedItemId = it.ITEM_BY_KEY.bed.id;
+  const y = 62;
+  const ax = Math.floor(g.player.pos.x) + 8, az = Math.floor(g.player.pos.z) + 8;
+
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -3; dz <= 1; dz++) {
+      // 先清空台面上方两层：万一天然地形/树长到这块高度，准星会被它挡住、床头那格也会被占
+      g.world.setBlock(ax + dx, y, az + dz, 0);
+      g.world.setBlock(ax + dx, y + 1, az + dz, 0);
+      g.world.setBlock(ax + dx, y - 1, az + dz, stoneId);
+    }
+  }
+  g.world.setBlock(ax, y, az - 2, stoneId);          // 靶柱
+  g.player.pos.set(ax + 0.5, y, az + 0.5);
+  g.player.vel.set(0, 0, 0);
+  g.player.yaw = g.player.targetYaw = 0;             // 朝北：前方 = -z
+  g.player.pitch = g.player.targetPitch = -0.31;     // 往下压一点（lookDir 的 y = sin(pitch)，负值才是低头），压在靶柱顶面
+  g.player.onGround = true;
+  const hit = g.hitTest();
+
+  const foot = [ax, y + 1, az - 2], head = [ax, y + 1, az - 3];
+  const slot = g.inventory.selected;
+  g.inventory.slots[slot] = { id: bedItemId, count: 3, dmg: 0 };
+
+  // 1) 先把床头那一格堵住 → 一格都不该放下、也不该扣物品
+  g.world.setBlock(head[0], head[1], head[2], stoneId);
+  g.useItem();
+  const blocked = { foot: g.world.getBlock(foot[0], foot[1], foot[2]), left: g.inventory.slots[slot].count };
+  g.world.setBlock(head[0], head[1], head[2], 0);
+
+  // 2) 腾出来再放一次 → 两格都该是床，而且各带自己的状态字节
+  g.useItem();
+  const r = {
+    hit: hit ? [hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz] : null,
+    blocked: blocked,
+    footId: g.world.getBlock(foot[0], foot[1], foot[2]), footMeta: g.world.getMeta(foot[0], foot[1], foot[2]),
+    headId: g.world.getBlock(head[0], head[1], head[2]), headMeta: g.world.getMeta(head[0], head[1], head[2]),
+    want: { foot: bd.bedMeta(0, false), head: bd.bedMeta(0, true) },
+    left: g.inventory.slots[slot].count,
+    bedId, bedItemId, foot, head, y, ax, az, stoneId
+  };
+  g.inventory.slots[slot] = null;
+  return r;
+})()`);
+check('准星正好打在靶柱顶面（后面两条的前提）',
+  place.hit && place.hit[0] === place.ax && place.hit[2] === place.az - 2 && place.hit[3] === 0 && place.hit[4] === 1,
+  JSON.stringify(place.hit));
+check('一次右键放下两格床（床尾 + 床头都在）',
+  place.footId === place.bedId && place.headId === place.bedId,
+  'foot=' + place.footId + ' head=' + place.headId);
+check('床尾 = foot、床头 = head，朝向跟着玩家（朝北）',
+  place.footMeta === place.want.foot && place.headMeta === place.want.head,
+  'footMeta=' + place.footMeta + ' headMeta=' + place.headMeta + ' 期望 ' + place.want.foot + '/' + place.want.head);
+check('床头落在远离玩家的那一格（朝北 → 床头在 -z 侧）',
+  place.headMeta === place.want.head && place.headId === place.bedId, 'z=' + place.head[2] + ' 床尾 z=' + place.foot[2]);
+check('放一张床只扣 1 个', place.left === 2, '剩 ' + place.left);
+check('床头那一格被占住时，一格都不放（也不会扣物品）',
+  place.blocked.foot !== place.bedId && place.blocked.left === 3,
+  'foot=' + place.blocked.foot + ' 剩=' + place.blocked.left);
+
+// ---- C5 破坏任一半：两格一起消失，但只掉一件 ----
+const halfBreak = await ev(`(async function(){
+  const g = window.game;
+  const foot = [${place.foot[0]}, ${place.foot[1]}, ${place.foot[2]}];
+  const head = [${place.head[0]}, ${place.head[1]}, ${place.head[2]}];
+  const bedItemId = ${place.bedItemId};
+  const countBeds = function(){
+    let n = 0;
+    for (const e of g.dropped.list) if (e.id === bedItemId) n += e.count;
+    return n;
+  };
+  const before = countBeds();
+  g.breakBlock(foot[0], foot[1], foot[2]);            // 只挖床尾这一格
+  const r = {
+    foot: g.world.getBlock(foot[0], foot[1], foot[2]),
+    head: g.world.getBlock(head[0], head[1], head[2]),
+    dropped: countBeds() - before
+  };
+  // 反过来再验一次：先摆一张好的床，改成挖床头
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id;
+  g.world.setBlock(foot[0], foot[1], foot[2], bedId, bd.bedMeta(0, false));
+  g.world.setBlock(head[0], head[1], head[2], bedId, bd.bedMeta(0, true));
+  const before2 = countBeds();
+  g.breakBlock(head[0], head[1], head[2]);            // 这次挖床头
+  r.foot2 = g.world.getBlock(foot[0], foot[1], foot[2]);
+  r.head2 = g.world.getBlock(head[0], head[1], head[2]);
+  r.dropped2 = countBeds() - before2;
+  return r;
+})()`);
+check('挖床尾：两格一起消失', halfBreak.foot === 0 && halfBreak.head === 0,
+  'foot=' + halfBreak.foot + ' head=' + halfBreak.head);
+check('挖床尾只掉 1 张床', halfBreak.dropped === 1, '掉了 ' + halfBreak.dropped);
+check('挖床头同样两格一起消失', halfBreak.foot2 === 0 && halfBreak.head2 === 0,
+  'foot=' + halfBreak.foot2 + ' head=' + halfBreak.head2);
+check('挖床头也只掉 1 张床', halfBreak.dropped2 === 1, '掉了 ' + halfBreak.dropped2);
+
+// ---- C6 自动上台阶：床只有 9/16 高，走过去该直接踩上去 ----
+//
+// 原版步高 0.6，床 9/16 = 0.5625 刚好在下面 —— 所以床沿是能直接走上去的台阶，
+// 不会像一堵矮墙那样把人挡在外面。这条把「形状改了但碰撞还按整格算」钉住：
+// 按整格算的话，玩家会永远被床挡在 1 格外，y 也不会升。
+const stepUp = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 62;
+  const ax = Math.floor(g.player.pos.x) - 8, az = Math.floor(g.player.pos.z) - 8;
+  // 先把当前位置记下来（这一段结束时人还在 C4 那块台子上，站得稳）
+  const back = { x: g.player.pos.x, y: g.player.pos.y, z: g.player.pos.z, yaw: g.player.yaw, pitch: g.player.pitch };
+
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -5; dz <= 1; dz++) {
+      g.world.setBlock(ax + dx, y, az + dz, 0);
+      g.world.setBlock(ax + dx, y + 1, az + dz, 0);
+      g.world.setBlock(ax + dx, y + 2, az + dz, 0);
+      g.world.setBlock(ax + dx, y - 1, az + dz, stoneId);
+    }
+  }
+  // 床就摆在正前方一格（-z 方向），完整的两格
+  g.world.setBlock(ax, y, az - 1, bedId, bd.bedMeta(0, false));
+  g.world.setBlock(ax, y, az - 2, bedId, bd.bedMeta(0, true));
+  g.world.setBlock(ax, y - 1, az - 2, stoneId);       // 床下面也得有地，否则走过去会掉下去
+  g.player.pos.set(ax + 0.5, y, az + 0.5);
+  g.player.vel.set(0, 0, 0);
+  g.player.yaw = g.player.targetYaw = 0;
+  g.player.pitch = g.player.targetPitch = 0;
+  g.player.onGround = true;
+  const z0 = g.player.pos.z;
+  for (let f = 0; f < 40; f++) g.player.update(1 / 60, { forward: true });
+  const r = {
+    y: g.player.pos.y, z: g.player.pos.z, z0,
+    want: y + bd.BED_H, onBedTop: y + bd.BED_H, cell: y
+  };
+  // 收尾：把床和台子都清掉，人放回原处（后面那段要测「睡眠时不能动」，
+  // 玩家悬空的话光重力就够让它 fail）
+  g.world.setBlock(ax, y, az - 1, 0);
+  g.world.setBlock(ax, y, az - 2, 0);
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -5; dz <= 1; dz++) g.world.setBlock(ax + dx, y - 1, az + dz, 0);
+  g.player.pos.set(back.x, back.y, back.z);
+  g.player.vel.set(0, 0, 0);
+  g.player.yaw = g.player.targetYaw = back.yaw;
+  g.player.pitch = g.player.targetPitch = back.pitch;
+  g.player.fallDistance = 0;
+  g.player.lastGroundY = back.y;
+  return r;
+})()`);
+check('往前走会被床挡住不假 —— 但应该顺势抬腿站上去（y 升到床垫面 9/16）',
+  Math.abs(stepUp.y - stepUp.want) < 0.02, 'y=' + stepUp.y.toFixed(4) + ' 期望 ' + stepUp.want.toFixed(4));
+check('抬腿之后人确实进到了床那一格（不是原地跳）', stepUp.z < stepUp.z0 - 0.2,
+  'z ' + stepUp.z0.toFixed(2) + ' → ' + stepUp.z.toFixed(2));
 
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){

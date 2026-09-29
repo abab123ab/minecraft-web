@@ -1,5 +1,6 @@
 import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
+import { boxHitsBlock } from './shapes.js';
 import { HEIGHT } from './worlddef.js';
 import { terrainHeight } from './worldgen.js';
 import { buildMobMesh } from './mobtex.js';
@@ -149,13 +150,23 @@ export class MobManager {
 
   hitsSolid(m, x, y, z) {
     const r = m.halfWidth();
-    const x0 = Math.floor(x - r), x1 = Math.floor(x + r);
-    const z0 = Math.floor(z - r), z1 = Math.floor(z + r);
-    const y0 = Math.floor(y), y1 = Math.floor(y + m.def.h - 0.01);
+    const box = {
+      minX: x - r, maxX: x + r,
+      minY: y, maxY: y + m.def.h,
+      minZ: z - r, maxZ: z + r
+    };
+    const x0 = Math.floor(box.minX), x1 = Math.floor(box.maxX - 1e-6);
+    const z0 = Math.floor(box.minZ), z1 = Math.floor(box.maxZ - 1e-6);
+    const y0 = Math.floor(box.minY), y1 = Math.floor(box.maxY - 1e-6);
     for (let yy = y0; yy <= y1; yy++) {
+      if (yy < 0 || yy >= HEIGHT) continue;
       for (let zz = z0; zz <= z1; zz++) {
         for (let xx = x0; xx <= x1; xx++) {
-          if (this.isSolidAt(xx, yy, zz)) return true;
+          const id = this.world.getBlock(xx, yy, zz);
+          if (!isSolid(id)) continue;
+          // 按判定箱比，不是「这格是实心就撞」：床只有 9/16 高，
+          // 生物贴着它走应该能挤过去半个身子，而不是被整格挡住。
+          if (boxHitsBlock(box, xx, yy, zz, id, this.world.getMeta(xx, yy, zz))) return true;
         }
       }
     }

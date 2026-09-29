@@ -1,6 +1,8 @@
 import * as THREE from './vendor/three.module.js';
 import { buildAtlas, ASSET_COUNT, tileUV, TILE_INDEX } from './textures.js';
 import { BLOCKS, AIR, breakTime, canHarvest } from './blocks.js';
+import { bedPlaceMeta, bedPartner, bedIsHead, BED_H } from './bedshape.js';
+import { shapeBounds } from './shapes.js';
 import { ITEMS, ITEM_BY_KEY, FIST_ATTACK } from './items.js';
 import { World } from './world.js';
 import { CHUNK, HEIGHT, SEA } from './worlddef.js';
@@ -174,7 +176,15 @@ class Game {
     }
     const hit = this.hitTest();
     this.highlight.visible = !!hit;
-    if (hit) this.highlight.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+    if (hit) this.fitBoxTo(this.highlight, hit);
+  }
+
+  // 选中框和裂纹都是同一个单位立方体，按方块的**外观包围盒**摆 —— 床只有 9/16 高，
+  // 框（和裂纹贴图）还按整格画的话，会框着半格空气、裂纹也糊在空气上。
+  fitBoxTo(mesh, hit) {
+    const b = shapeBounds(hit.id, hit.meta || 0);
+    mesh.scale.set(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
+    mesh.position.set(hit.x + (b[0] + b[3]) / 2, hit.y + (b[1] + b[4]) / 2, hit.z + (b[2] + b[5]) / 2);
   }
 
   giveStartKit() {
@@ -551,11 +561,35 @@ class Game {
       if (!BLOCKS[this.world.getBlock(bx, by - 1, bz)].solid) return;
       if (hit.ny !== 1) return;
     }
+    // 床占两格：床尾放在点到的这一格，床头放在**远离玩家**的那一格（原版规则，
+    // 见 bedPlaceMeta）。两格都得腾得出来，放不下就一格都不放 —— 原版也是这么办的。
+    if (BLOCKS[item.blockId].key === 'bed') {
+      const at = bedPlaceMeta(this.player.yaw);
+      const hx = bx + at.dx, hz = bz + at.dz;
+      if (!this.freeForBlock(hx, by, hz)) {
+        this.ui.showHint('床要两格地方');
+        return;
+      }
+      this.world.setBlock(bx, by, bz, item.blockId, at.foot);
+      this.world.setBlock(hx, by, hz, item.blockId, at.head);
+      this.inventory.consumeHeld(1);
+      this.sfx.place(BLOCKS[item.blockId]);
+      this.ui.render();
+      return;
+    }
     this.world.setBlock(bx, by, bz, item.blockId);
     this.inventory.consumeHeld(1);
     const placed = BLOCKS[item.blockId];
     if (placed) this.sfx.place(placed);
     this.ui.render();
+  }
+
+  // 这一格现在腾不腾得出来放方块：得是空气或水，而且不能压在玩家身上。
+  freeForBlock(x, y, z) {
+    if (y < 0 || y >= HEIGHT) return false;
+    const cur = this.world.getBlock(x, y, z);
+    if (cur !== AIR && !BLOCKS[cur].liquid) return false;
+    return !this.intersectsPlayer(x, y, z);
   }
 
   trySleep(hit) {
@@ -564,8 +598,24 @@ class Game {
       this.ui.showHint('现在还不是晚上睡觉的时候');
       return;
     }
-    this.spawnPoint.set(hit.x + 0.5, hit.y + 1, hit.z + 0.5);
-    this.player.pos.set(hit.x + 0.5, hit.y + 1, hit.z + 0.5);
+    // 点床尾也能睡（原版 BedBlock 会把 foot 换算成 head 再处理），但重生点一定定在
+    // 床头那一格。人在**床垫面**上，不是整格顶 —— 床只有 9/16 高，按 y+1 会把玩家
+    // 悬在床垫上方 7/16 处往下掉（睡醒那一下会看见自己从床里弹出来）。
+    const meta = hit.meta || 0;
+    let hx = hit.x, hz = hit.z;
+    if (!bedIsHead(meta)) {
+      const p = bedPartner(meta);
+      hx += p[0]; hz += p[1];
+    }
+    // 只有一半的床不算床：对面那格得真的是同一张床的床头（原版也这么判）。
+    const bedId = this.world.getBlock(hit.x, hit.y, hit.z);
+    if (this.world.getBlock(hx, hit.y, hz) !== bedId || !bedIsHead(this.world.getMeta(hx, hit.y, hz))) {
+      this.ui.showHint('这张床缺了另一半');
+      return;
+    }
+    const sy = hit.y + BED_H;
+    this.spawnPoint.set(hx + 0.5, sy, hz + 0.5);
+    this.player.pos.set(hx + 0.5, sy, hz + 0.5);
     this.player.vel.set(0, 0, 0);
     this.player.flying = false;
     this.player.onGround = true;
@@ -693,6 +743,17 @@ class Game {
   }
 
   mineBlock(x, y, z, block, harvest, sound, tally) {
+    // 床是一张两格：破坏任意一半，另一半跟着消失，但只掉**一件**（原版如此）。
+    // 所以这里顺手把对面那格也清掉，而且不参与下面的掉落结算 ——
+    // 结算只按「被挖的这一格」算一次，不管它连带清掉了几格。
+    if (block.key === 'bed') {
+      const p = bedPartner(this.world.getMeta(x, y, z));
+      const px = x + p[0], pz = z + p[1];
+      if (this.world.getBlock(px, y, pz) === block.id) {
+        this.world.setBlock(px, y, pz, AIR);
+        if (block.tiles) this.particles.burst(px, y, pz, block.tiles[1] || block.tiles[0], 10);
+      }
+    }
     this.world.setBlock(x, y, z, AIR);
     if (block.tiles) this.particles.burst(x, y, z, block.tiles[1] || block.tiles[0], 10);
     if (!block.unbreakable && sound) this.sfx.breakBlock(block);
@@ -778,7 +839,7 @@ class Game {
       this.hideMineOverlay();
       return;
     }
-    this.crackMesh.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+    this.fitBoxTo(this.crackMesh, hit);
 
     const block = BLOCKS[hit.id];
     if (block.unbreakable) {
