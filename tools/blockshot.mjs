@@ -175,15 +175,25 @@ const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurfa
 fs.writeFileSync(OUT, Buffer.from(shot.result.data, 'base64'));
 console.log('已写出 ' + OUT);
 
-// 顺便报一下这排方块各自走哪一路材质
+// 顺便报一下这排方块各自走哪一路材质。
+// 这里要跟 mesher.js 的分流顺序逐条对齐，不能只看方块的声明：火把是**硬编码**进
+// 镂空批次的（贴图 80% 全透明，不这么走会画成一根黑条），跟它自己的声明无关。
+// 光看 b.cutout 会把它报成「半透明(混合)」，是错的 —— 这张表就是拿来看这个的，
+// 报错等于白出这张图。
 const batch = await ev(`(async function(){
   const B = (await import('/js/blocks.js')).BLOCKS;
   const keys = ${JSON.stringify(KEYS)};
+  function batchOf(b) {
+    if (b.key === 'torch') return '镂空(alphaTest)';
+    if (b.liquid) return '水(混合)';
+    if (b.cutout) return '镂空(alphaTest)';
+    if (b.transparent) return '半透明(混合)';
+    return '不透明';
+  }
   return keys.map(function(k){
     const b = B.find(function(b){ return b.key === k; });
     if (!b) return k + ': 不存在';
-    const t = b.liquid ? '水(混合)' : (b.cutout ? '镂空(alphaTest)' : (b.transparent ? '半透明(混合)' : '不透明'));
-    return k.padEnd(16) + t;
+    return k.padEnd(16) + batchOf(b);
   });
 })()`);
 console.log('\n材质批次：');
