@@ -73,15 +73,29 @@ export class World {
     return ch.data[lx + CHUNK * (lz + CHUNK * y)];
   }
 
-  setBlock(x, y, z, id) {
+  // 方块状态字节。目前只有床用（part | facing << 1），其余方块都是 0。
+  // 单独一个数组而不是塞进 data 里：data 是 Uint8Array，一个字节只够放 id，
+  // 改成 Uint16Array 会让所有读写点（worldgen / lighting / mesher）都跟着改。
+  getMeta(x, y, z) {
+    if (y < 0 || y >= HEIGHT) return 0;
+    const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK);
+    const ch = this.chunks.get(this.key(cx, cz));
+    if (!ch) return 0;
+    const lx = x - cx * CHUNK, lz = z - cz * CHUNK;
+    return ch.meta[lx + CHUNK * (lz + CHUNK * y)];
+  }
+
+  setBlock(x, y, z, id, meta) {
     if (y < 0 || y >= HEIGHT) return;
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK);
     const ch = this.chunks.get(this.key(cx, cz));
     if (!ch) return;
     const lx = x - cx * CHUNK, lz = z - cz * CHUNK;
     const idx = lx + CHUNK * (lz + CHUNK * y);
-    this.recordEdit(cx, cz, idx, id, ch.data[idx]);
+    const m = meta | 0;
+    this.recordEdit(cx, cz, idx, id, m, ch.data[idx], ch.meta[idx]);
     ch.data[idx] = id;
+    ch.meta[idx] = m;
     this.markSections(cx, cz, y - 1, y + 1);
     if (lx === 0) this.markSections(cx - 1, cz, y - 1, y + 1);
     if (lx === CHUNK - 1) this.markSections(cx + 1, cz, y - 1, y + 1);
@@ -122,24 +136,30 @@ export class World {
     }
   }
 
-  recordEdit(cx, cz, idx, id, prev) {
-    if (id === prev) return;
+  // rec 结构：[改动前的 id, 改动前的 meta, 现在的 id, 现在的 meta]。
+  // 从存档读回来的记录前两项是 -1（原值未知），永远不会等于当前值，所以必定被保留。
+  recordEdit(cx, cz, idx, id, meta, prev, prevMeta) {
+    if (id === prev && meta === prevMeta) return;
     const k = this.key(cx, cz);
     let m = this.edits.get(k);
     if (!m) { m = new Map(); this.edits.set(k, m); }
     const rec = m.get(idx);
     if (rec) {
-      rec[1] = id;
-      if (rec[1] === rec[0]) m.delete(idx);
+      rec[2] = id;
+      rec[3] = meta;
+      if (rec[2] === rec[0] && rec[3] === rec[1]) m.delete(idx);
     } else {
-      m.set(idx, [prev, id]);
+      m.set(idx, [prev, prevMeta, id, meta]);
     }
   }
 
   applyEdits(ch) {
     const m = this.edits.get(this.key(ch.cx, ch.cz));
     if (!m) return;
-    for (const [idx, rec] of m) ch.data[idx] = rec[1];
+    for (const [idx, rec] of m) {
+      ch.data[idx] = rec[2];
+      ch.meta[idx] = rec[3];
+    }
   }
 
   ensureChunk(cx, cz) {
@@ -149,6 +169,7 @@ export class World {
     ch = {
       cx, cz,
       data: new Uint8Array(CHUNK * CHUNK * HEIGHT),
+      meta: new Uint8Array(CHUNK * CHUNK * HEIGHT),
       skyLight: new Uint8Array(CHUNK * CHUNK * HEIGHT),
       blockLight: new Uint8Array(CHUNK * CHUNK * HEIGHT),
       surface: new Uint8Array(CHUNK * CHUNK),
@@ -271,7 +292,7 @@ export class World {
     while (t <= maxDist) {
       const id = this.getBlock(x, y, z);
       if (id !== AIR && !BLOCKS[id].liquid) {
-        return { x, y, z, nx, ny, nz, id };
+        return { x, y, z, nx, ny, nz, id, meta: this.getMeta(x, y, z) };
       }
       if (tMaxX < tMaxY && tMaxX < tMaxZ) {
         x += stepX; t = tMaxX; tMaxX += tDeltaX; nx = -stepX; ny = 0; nz = 0;

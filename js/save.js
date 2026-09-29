@@ -1,16 +1,23 @@
 import { CHUNK } from './worlddef.js';
 
-export const SAVE_KEY = 'mcweb.save.v1';
-const VERSION = 1;
+// v2：编辑记录里带上方块状态字节（床的朝向/床头床尾）。
+// 格式变了所以换 key，loadSave 里版本对不上一律当没存档 —— 旧档作废是刻意的。
+export const SAVE_KEY = 'mcweb.save.v2';
+const VERSION = 2;
 const EDIT_BUDGET = 3.5 * 1024 * 1024;
 
-// -1 表示「原值未知」（从存档读回的改动），永远不会等于当前值，因此必定被保留
+// 编辑记录 rec = [原 id, 原 meta, 现 id, 现 meta]。
+// 序列化时 meta 为 0 就直接写 id（绝大多数方块都是 0，省一半体积）；
+// 不为 0 才写成 [id, meta]。
 function serializeEdits(edits, spawn) {
   const scx = Math.floor(spawn.x / CHUNK), scz = Math.floor(spawn.z / CHUNK);
   const list = [];
   for (const [k, m] of edits) {
     const o = {};
-    for (const [idx, rec] of m) if (rec[1] !== rec[0]) o[idx] = rec[1];
+    for (const [idx, rec] of m) {
+      if (rec[2] === rec[0] && rec[3] === rec[1]) continue;
+      o[idx] = rec[3] ? [rec[2], rec[3]] : rec[2];
+    }
     const keys = Object.keys(o);
     if (!keys.length) continue;
     const parts = k.split('|');
@@ -31,7 +38,10 @@ function deserializeEdits(obj) {
   const m = new Map();
   for (const k in obj) {
     const inner = new Map();
-    for (const idx in obj[k]) inner.set(Number(idx), [-1, obj[k][idx]]);
+    for (const idx in obj[k]) {
+      const v = obj[k][idx];
+      inner.set(Number(idx), Array.isArray(v) ? [-1, 0, v[0], v[1]] : [-1, 0, v, 0]);
+    }
     m.set(k, inner);
   }
   return m;

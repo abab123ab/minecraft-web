@@ -248,6 +248,77 @@ check('右键床后进入睡眠状态', night.sleeping === true);
 check('重生点更新为床的位置', night.spawnOk);
 check('黑屏遮罩 #sleep 已点亮', night.overlayOn === true);
 
+// ---- C2 方块状态字节（meta）：能存能取、射线带得出、改回去要归零 ----
+const metaTest = await ev(`(async function(){
+  const g = window.game;
+  const bd = await import('/js/bedshape.js');
+  const m = await import('/js/blocks.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const bx = Math.floor(g.player.pos.x) - 2;
+  const by = Math.floor(g.player.pos.y) + 3;
+  const bz = Math.floor(g.player.pos.z);
+
+  g.world.setBlock(bx, by, bz, stoneId);
+  const zero = g.world.getMeta(bx, by, bz);
+
+  const head = bd.bedMeta(3, true);          // 朝东 + 床头 = (3<<1)|1 = 7
+  g.world.setBlock(bx, by, bz, bedId, head);
+  const got = g.world.getMeta(bx, by, bz);
+  const id = g.world.getBlock(bx, by, bz);
+
+  const hit = g.world.raycast({ x: bx + 0.5, y: by + 0.9, z: bz + 0.5 }, { x: 0, y: -1, z: 0 }, 1);
+
+  g.world.setBlock(bx, by, bz, stoneId);
+  const after = g.world.getMeta(bx, by, bz);
+  const idAfter = g.world.getBlock(bx, by, bz);
+
+  return { zero, got, head, id, bedId, stoneId, after, idAfter, rayMeta: hit ? hit.meta : -1, rayId: hit ? hit.id : -1 };
+})()`);
+check('普通方块的状态字节默认是 0', metaTest.zero === 0, String(metaTest.zero));
+check('床的状态字节能存能取（朝东+床头 = 7）',
+  metaTest.got === 7 && metaTest.id === metaTest.bedId, JSON.stringify(metaTest));
+check('射线命中时带出状态字节', metaTest.rayMeta === 7 && metaTest.rayId === metaTest.bedId,
+  'meta=' + metaTest.rayMeta + ' id=' + metaTest.rayId);
+check('同一格改回普通方块后状态字节归零',
+  metaTest.after === 0 && metaTest.idAfter === metaTest.stoneId, String(metaTest.after));
+
+// ---- C3 存档往返：状态字节要能跟着存下去、读回来 ----
+const saveRound = await ev(`(async function(){
+  const sv = await import('/js/save.js');
+  const bd = await import('/js/bedshape.js');
+  const m = await import('/js/blocks.js');
+  const g = window.game;
+  const bedId = m.BLOCK_BY_KEY.bed.id;
+  const bx = Math.floor(g.player.pos.x) - 4;
+  const by = Math.floor(g.player.pos.y) + 3;
+  const bz = Math.floor(g.player.pos.z) + 1;
+  const meta = bd.bedMeta(1, true);        // 朝南 + 床头 = (1<<1)|1 = 3
+  g.world.setBlock(bx, by, bz, bedId, meta);
+
+  const wrote = sv.saveGame(g);
+  const back = sv.loadSave();
+  const CHUNK = 16;
+  const cx = Math.floor(bx / CHUNK), cz = Math.floor(bz / CHUNK);
+  const idx = (bx - cx * CHUNK) + CHUNK * ((bz - cz * CHUNK) + CHUNK * by);
+  const inner = back && back.edits.get(cx + '|' + cz);
+  const rec = inner ? inner.get(idx) : null;
+  const json = JSON.stringify(sv.serialize(g));
+  const compact = json.includes('"edits"');
+
+  sv.clearSave();                          // 别把测试存档留给后面的用例
+  return {
+    wrote, hasSave: !!back,
+    ver: back ? back.version : -1,
+    rec: rec || null, meta, compact,
+    raw: json.length
+  };
+})()`);
+check('存档能写能读', saveRound.wrote === true && saveRound.hasSave === true);
+check('存档版本升到 2', saveRound.ver === 2, String(saveRound.ver));
+check('存档里的编辑记录带着状态字节',
+  saveRound.rec && saveRound.rec[0] === -1 && saveRound.rec[2] === 31 && saveRound.rec[3] === saveRound.meta,
+  JSON.stringify(saveRound.rec) + ' 期望 meta=' + saveRound.meta);
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;
