@@ -605,6 +605,53 @@ check('生物站在床上不会一直弹（卡住判定改按判定箱，不再�
 check('生物踩实了床垫面、没穿下去', Math.abs(mobOnBed.restY - mobOnBed.bedTop) < 0.05,
   'y=' + mobOnBed.restY.toFixed(4));
 
+// ---- C9 射线要认形状：瞄准床垫上方那 7/16 的空气不该选中床 ----
+//
+// 按格子判定的话，床那一格整格都算「被指到」，可选中框画在 9/16 处 ——
+// 准星明明在床垫上方飘着，框却在下面亮，看着很别扭。
+const rayShape = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 64;
+  const ax = Math.floor(g.player.pos.x) + 20, az = Math.floor(g.player.pos.z) + 20;
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, stoneId);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+  }
+  g.world.setBlock(ax, y, az, bedId, bd.bedMeta(0, false));       // 床尾
+  g.world.setBlock(ax, y, az - 1, bedId, bd.bedMeta(0, true));    // 床头
+  g.world.setBlock(ax, y, az + 2, stoneId);                       // 床后面那堵墙
+
+  const upper = g.world.raycast({ x: ax + 0.5, y: y + 0.75, z: az - 1.5 }, { x: 0, y: 0, z: 1 }, 10);
+  const lower = g.world.raycast({ x: ax + 0.5, y: y + 0.3, z: az - 1.5 }, { x: 0, y: 0, z: 1 }, 10);
+  const down  = g.world.raycast({ x: ax + 0.5, y: y + 1.5, z: az + 0.5 }, { x: 0, y: -1, z: 0 }, 4);
+
+  const r = {
+    upperId: upper ? upper.id : -1, upperZ: upper ? upper.z : 99,
+    lowerId: lower ? lower.id : -1, lowerZ: lower ? lower.z : 99, lowerNz: lower ? lower.nz : 0,
+    downNy: down ? down.ny : 0, downId: down ? down.id : -1,
+    bedId, stoneId, az
+  };
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, 0);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+  }
+  return r;
+})()`);
+check('瞄准床垫上方的空气，射线穿过去打到后面的方块（不再整格都算指到床）',
+  rayShape.upperId === rayShape.stoneId && rayShape.upperZ === rayShape.az + 2,
+  'id=' + rayShape.upperId + ' z=' + rayShape.upperZ + ' 期望 stone@' + (rayShape.az + 2));
+check('瞄准床垫本身还是能打到床，法线是朝 -z 的侧面',
+  rayShape.lowerId === rayShape.bedId && rayShape.lowerZ === rayShape.az - 1 && rayShape.lowerNz === -1,
+  'id=' + rayShape.lowerId + ' z=' + rayShape.lowerZ + ' nz=' + rayShape.lowerNz);
+check('从正上方往下看床垫，法线是 +y（能正确摆在床垫上面）',
+  rayShape.downId === rayShape.bedId && rayShape.downNy === 1,
+  'ny=' + rayShape.downNy);
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;

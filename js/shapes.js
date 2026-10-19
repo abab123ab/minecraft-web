@@ -123,3 +123,42 @@ export function blockTop(id, meta) {
   for (const item of list) if (item.box[4] > top) top = item.box[4];
   return top;
 }
+
+// 射线跟某一格的**判定箱**求交。满格方块由 walk 的 DDA 直接判定，不走这里。
+//
+// 为什么需要它：床只占 9/16，瞄准床垫上方那 7/16 的空气点鼠标，按格子判定会
+// 把床选中（选中框却画在 9/16 那里，看着就是「框在下面、准星在上面还亮着」）。
+const RAY_EPS = 1e-9;
+
+function raySlab(o, d, lo, hi, axis, st) {
+  if (d > -RAY_EPS && d < RAY_EPS) return o >= lo && o <= hi;
+  const inv = 1 / d;
+  let t1 = (lo - o) * inv, t2 = (hi - o) * inv, sign = -1;
+  if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; sign = 1; }
+  if (t1 > st.t) { st.t = t1; st.axis = axis; st.sign = sign; }
+  if (t2 < st.len) st.len = t2;
+  return st.t <= st.len;
+}
+
+// 打中返回 { t, axis, nx, ny, nz }（t 从原点算），打空返回 null。
+export function rayHitsBox(ox, oy, oz, dx, dy, dz, maxT, bx, by, bz, id, meta) {
+  const def = BLOCKS[id];
+  if (!def.boxes && !def.collide) return null;
+  let bestT = Infinity, bestAxis = -1, bestSign = 0;
+  for (const item of blockCollide(id, meta)) {
+    const s = item.box;
+    const st = { t: 0, len: maxT, axis: -1, sign: 0 };
+    if (!raySlab(ox, dx, bx + s[0], bx + s[3], 0, st)) continue;
+    if (!raySlab(oy, dy, by + s[1], by + s[4], 1, st)) continue;
+    if (!raySlab(oz, dz, bz + s[2], bz + s[5], 2, st)) continue;
+    if (st.t < bestT) { bestT = st.t; bestAxis = st.axis; bestSign = st.sign; }
+  }
+  if (bestT === Infinity) return null;
+  return {
+    t: bestT,
+    axis: bestAxis,
+    nx: bestAxis === 0 ? bestSign : 0,
+    ny: bestAxis === 1 ? bestSign : 0,
+    nz: bestAxis === 2 ? bestSign : 0
+  };
+}
