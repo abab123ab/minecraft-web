@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.js';
 import { ITEMS, itemIconCanvas } from './items.js';
 import { isSolid } from './blocks.js';
-import { boxHitsBlock } from './shapes.js';
+import { boxHitsBlock, blockTop } from './shapes.js';
 import { HEIGHT } from './worlddef.js';
 
 const GRAVITY = 24;
@@ -60,7 +60,11 @@ export class DroppedItems {
 
       const p = e.pos;
       const feetY = p.y;
-      const belowSolid = this.isSolidAt(Math.floor(p.x), Math.floor(feetY - 0.12), Math.floor(p.z));
+      // 脚底往下 0.12 探一格，看踩在什么上面。要注意这一格的**顶面不一定在 y+1**：
+      // 床只有 9/16 高，写死 +1.12 会让掉在床上的物品浮起 7/16。
+      const bx = Math.floor(p.x), by = Math.floor(feetY - 0.12), bz = Math.floor(p.z);
+      const belowId = by >= 0 && by < HEIGHT ? this.world.getBlock(bx, by, bz) : 0;
+      const belowSolid = isSolid(belowId);
 
       e.vel.y -= GRAVITY * dt;
       if (belowSolid && e.vel.y < 0) {
@@ -68,7 +72,7 @@ export class DroppedItems {
         else e.vel.y = 0;
         e.vel.x *= Math.pow(0.001, dt);
         e.vel.z *= Math.pow(0.001, dt);
-        p.y = Math.floor(feetY - 0.12) + 1.12;
+        p.y = by + blockTop(belowId, this.world.getMeta(bx, by, bz)) + 0.12;
       }
 
       this.moveAxis(e, 'x', e.vel.x * dt);
@@ -130,18 +134,11 @@ export class DroppedItems {
           if (!isSolid(id)) continue;
           // 掉落物的移动也按判定箱比：床只有 9/16 高，从旁边滚过去应该蹭着床垫走，
           // 而不是被整格挡住、也不是穿过去。
-          // （静止高度那套还是按整格算的 —— 掉在床上的物品会稍微浮一点，先这样。）
           if (boxHitsBlock(box, x, y, z, id, this.world.getMeta(x, y, z))) return true;
         }
       }
     }
     return false;
-  }
-
-  isSolidAt(x, y, z) {
-    if (y < 0 || y >= HEIGHT) return false;
-    const id = this.world.getBlock(x, y, z);
-    return isSolid(id);
   }
 
   remove(i) {

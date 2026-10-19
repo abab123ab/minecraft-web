@@ -95,18 +95,31 @@ export function boxHitsBlock(b, bx, by, bz, id, meta) {
   return false;
 }
 
-// 按点采样共用一个盒子对象，别在每帧的热路径里造垃圾。
+// 一个世界坐标点是否落在某个方块的**判定箱**里。
+// 给「按点采样」的地方用：生物判断「我是不是卡在方块里面」就是这种语义，
+// 按整格问的话，站在床上的生物也会被算成卡住（床只占 9/16，脑袋在空气里）。
+//
+// 点用 1e-4 的小盒子代替：正好落在格子边界时，退化成零体积会跟盒子擦边判空。
 const POINT_BOX = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+const POINT_EPS = 1e-4;
 
-// 世界坐标点 (x,y,z) 是否落在某个实心方块的判定箱里。
-// 生物和掉落物是按点采样的（没有体积盒），这里让它们也认形状 —— 否则它们会
-// 直接穿过床那 9/16 的高度限制，踩在空气上走。
 export function pointHitsSolid(world, x, y, z) {
   const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
   const id = world.getBlock(bx, by, bz);
   if (!isSolid(id)) return false;
-  POINT_BOX.minX = POINT_BOX.maxX = x;
-  POINT_BOX.minY = POINT_BOX.maxY = y;
-  POINT_BOX.minZ = POINT_BOX.maxZ = z;
+  POINT_BOX.minX = x - POINT_EPS; POINT_BOX.maxX = x + POINT_EPS;
+  POINT_BOX.minY = y - POINT_EPS; POINT_BOX.maxY = y + POINT_EPS;
+  POINT_BOX.minZ = z - POINT_EPS; POINT_BOX.maxZ = z + POINT_EPS;
   return boxHitsBlock(POINT_BOX, bx, by, bz, id, world.getMeta(bx, by, bz));
+}
+
+// 这一格的判定箱最高能踩到哪（格内坐标 0..1）。满格就是 1，床是 9/16。
+// 掉落物静止时按这个落位 —— 写死顶面在 1 的话，掉在床上的东西会浮在半空。
+export function blockTop(id, meta) {
+  const def = BLOCKS[id];
+  if (!def.boxes && !def.collide) return 1;
+  const list = blockCollide(id, meta);
+  let top = 0;
+  for (const item of list) if (item.box[4] > top) top = item.box[4];
+  return top;
 }

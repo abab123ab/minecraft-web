@@ -517,6 +517,94 @@ check('往前走会被床挡住不假 —— 但应该顺势抬腿站上去（y 
 check('抬腿之后人确实进到了床那一格（不是原地跳）', stepUp.z < stepUp.z0 - 0.2,
   'z ' + stepUp.z0.toFixed(2) + ' → ' + stepUp.z.toFixed(2));
 
+// ---- C7 掉落物的静止高度要认判定箱顶面 ----
+//
+// 掉落物原来把静止高度写死成「整格顶 + 0.12」，床只有 9/16 高，
+// 于是掉在床上的东西会浮在床垫上方 7/16 的空中。
+// 顺手用普通方块做对照，确认满格那条路径没被改坏。
+const restY = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 62;
+  const ax = Math.floor(g.player.pos.x) + 12, az = Math.floor(g.player.pos.z) + 12;
+  const far = { x: 99999, y: 0, z: 99999 };      // 站远点，别被吸过去捡了
+
+  g.world.setBlock(ax, y - 1, az, stoneId);
+  g.world.setBlock(ax, y, az, 0);
+  g.world.setBlock(ax, y + 1, az, 0);
+
+  const settle = (py) => {
+    const n0 = g.dropped.list.length;
+    g.dropped.spawn(stoneId, 1, ax + 0.5, py, az + 0.5, { x: 0, y: 0, z: 0 });
+    const e = g.dropped.list[n0];
+    for (let f = 0; f < 90; f++) g.dropped.update(1 / 60, far, g.inventory, null);
+    const out = e.pos.y;
+    const i = g.dropped.list.indexOf(e);
+    if (i >= 0) g.dropped.remove(i);
+    return out;
+  };
+
+  g.world.setBlock(ax, y, az, bedId, bd.bedMeta(0, false));
+  const onBed = settle(y + bd.BED_H + 0.5);
+
+  g.world.setBlock(ax, y, az, stoneId);
+  const onStone = settle(y + 1.5);
+
+  g.world.setBlock(ax, y, az, 0);
+  g.world.setBlock(ax, y - 1, az, 0);
+  return { onBed, onStone, y, bedTop: y + bd.BED_H };
+})()`);
+check('掉在床上的物品停在床垫面（9/16 + 0.12），不再浮在半空',
+  Math.abs(restY.onBed - (restY.bedTop + 0.12)) < 1e-6,
+  'y=' + restY.onBed.toFixed(4) + ' 期望 ' + (restY.bedTop + 0.12).toFixed(4));
+check('布满格方块上的物品静止高度没变（整格顶 + 0.12）',
+  Math.abs(restY.onStone - (restY.y + 1.12)) < 1e-6,
+  'y=' + restY.onStone.toFixed(4) + ' 期望 ' + (restY.y + 1.12).toFixed(4));
+
+// ---- C8 生物站在床上不该一直弹 ----
+//
+// physics() 里那句「卡在方块里就往上顶」原来按整格问「这一格是不是实心」：
+// 床只有 9/16 高，站在床上的生物脑袋在空气里，却会被判成卡住 —— 每帧 vel.y = 8，
+// 结果就是站上去一直原地弹。得按判定箱问。
+const mobOnBed = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 62;
+  const ax = Math.floor(g.player.pos.x) + 16, az = Math.floor(g.player.pos.z) - 16;
+  for (let dz = 0; dz >= -1; dz--) {
+    g.world.setBlock(ax, y - 1, az + dz, stoneId);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+    g.world.setBlock(ax, y + 2, az + dz, 0);
+  }
+  g.world.setBlock(ax, y, az, bedId, bd.bedMeta(0, false));
+  g.world.setBlock(ax, y, az - 1, bedId, bd.bedMeta(0, true));
+
+  const mob = g.mobs.spawn('pig', ax + 0.5, y + bd.BED_H, az + 0.5);
+  const bedTop = y + bd.BED_H;
+  let maxY = 0;
+  for (let f = 0; f < 60; f++) {
+    g.mobs.physics(mob, 1 / 60);
+    if (mob.pos.y > maxY) maxY = mob.pos.y;
+  }
+  const r = { maxY, restY: mob.pos.y, bedTop, onGround: mob.onGround };
+  g.mobs.remove(g.mobs.list.indexOf(mob));
+  for (let dz = 0; dz >= -1; dz--) {
+    g.world.setBlock(ax, y - 1, az + dz, 0);
+    g.world.setBlock(ax, y, az + dz, 0);
+  }
+  return r;
+})()`);
+check('生物站在床上不会一直弹（卡住判定改按判定箱，不再按整格）',
+  mobOnBed.maxY < mobOnBed.bedTop + 0.1,
+  '最高 y=' + mobOnBed.maxY.toFixed(3) + ' 床垫面=' + mobOnBed.bedTop.toFixed(3));
+check('生物踩实了床垫面、没穿下去', Math.abs(mobOnBed.restY - mobOnBed.bedTop) < 0.05,
+  'y=' + mobOnBed.restY.toFixed(4));
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;

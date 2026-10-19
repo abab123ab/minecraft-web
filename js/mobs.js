@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.js';
 import { isSolid, isLiquid } from './blocks.js';
-import { boxHitsBlock } from './shapes.js';
+import { boxHitsBlock, pointHitsSolid } from './shapes.js';
 import { HEIGHT } from './worlddef.js';
 import { terrainHeight } from './worldgen.js';
 import { buildMobMesh } from './mobtex.js';
@@ -461,7 +461,10 @@ export class MobManager {
       m.vel.x *= 0.85;
       m.vel.z *= 0.85;
     }
-    if (this.isSolidAt(m.pos.x, m.pos.y + 0.4, m.pos.z) && m.onGround) {
+    // 卡在方块里就从里面顶出来。这里必须问「判定箱」，不能问「这格是不是实心」：
+    // 床只占 9/16 高，站在床上的生物脑袋在空气里，按整格问会每帧都判定成卡住，
+    // 于是站在床上一直原地蹦。
+    if (m.onGround && pointHitsSolid(this.world, m.pos.x, m.pos.y + 0.4, m.pos.z)) {
       m.vel.y = 8;
     }
   }
