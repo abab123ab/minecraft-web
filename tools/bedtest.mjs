@@ -724,6 +724,70 @@ check('僵尸在 3 格外游荡时不能睡，重生点也没被改', monsterSle
 check('提示语是「周围有怪物在游荡」', monsterSleep.hintText.includes('怪物'), monsterSleep.hintText);
 check('僵尸挪到 8 格以外就能睡了', monsterSleep.farZombie === true);
 
+// ---- C11 生物也有步高：床沿 9/16 该直接走上去，一格墙还是过不去 ----
+//
+// 原版生物 stepHeight = 0.6，床 0.5625 正好能迈上去。没加抬腿之前，
+// 生物撞到床只会掉头（stuckT > 0.35 换个方向），永远不会踩上床。
+const mobStep = await ev(`(async function(){
+  try {
+    return await (async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 62;
+  const ax = Math.floor(g.player.pos.x) + 24, az = Math.floor(g.player.pos.z) - 24;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      g.world.setBlock(ax + dx, y - 1, az + dz, stoneId);
+      g.world.setBlock(ax + dx, y, az + dz, 0);
+      g.world.setBlock(ax + dx, y + 1, az + dz, 0);
+      g.world.setBlock(ax + dx, y + 2, az + dz, 0);
+    }
+  }
+  g.world.setBlock(ax, y, az, bedId, bd.bedMeta(0, false));       // 床尾
+  g.world.setBlock(ax, y, az - 1, bedId, bd.bedMeta(0, true));    // 床头（朝北）
+
+  const pig = g.mobs.spawn('pig', ax + 0.5, y, az + 2.5);
+  const walk = () => {
+    let maxY = 0;
+    for (let f = 0; f < 120; f++) {
+      pig.vel.x = 0; pig.vel.z = -1.5;
+      g.mobs.physics(pig, 1 / 60);
+      if (pig.pos.y > maxY) maxY = pig.pos.y;
+    }
+    return { maxY, z: pig.pos.z };
+  };
+  const bed = walk();
+
+  // 对照：同一位置换成一格高的石墙，猪不该爬上去
+  pig.pos.set(ax + 0.5, y, az + 2.5);
+  pig.vel.set(0, 0, 0);
+  g.world.setBlock(ax, y, az, stoneId);
+  g.world.setBlock(ax, y, az - 1, stoneId);
+  const wall = walk();
+
+  g.mobs.remove(g.mobs.list.indexOf(pig));
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      g.world.setBlock(ax + dx, y - 1, az + dz, 0);
+      g.world.setBlock(ax + dx, y, az + dz, 0);
+    }
+  }
+  return { bed, wall, y, az, bedTop: y + bd.BED_H };
+    })();
+  } catch (e) { return { error: String(e && e.stack || e) }; }
+})()`);
+if (mobStep && mobStep.error) console.log('PAGE ERR', mobStep.error);
+check('猪朝床走能抬腿踩上床垫（最高到过床垫面附近）',
+  mobStep.bed.maxY > mobStep.y + 0.3 && mobStep.bed.maxY < mobStep.y + 0.75,
+  'maxY=' + mobStep.bed.maxY.toFixed(3) + ' 床垫面=' + mobStep.bedTop.toFixed(3));
+check('抬腿之后真的走过了床那一格（不是原地抬腿）',
+  mobStep.bed.z < mobStep.az + 1, 'z=' + mobStep.bed.z.toFixed(2) + ' 床南沿=' + (mobStep.az + 1));
+check('一格高的石墙还是跨不过去（不会顺墙爬）',
+  mobStep.wall.maxY < mobStep.y + 0.1 && mobStep.wall.z > mobStep.az + 1.2,
+  'maxY=' + mobStep.wall.maxY.toFixed(3) + ' z=' + mobStep.wall.z.toFixed(2));
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;

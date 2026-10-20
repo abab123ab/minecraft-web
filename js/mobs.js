@@ -10,6 +10,11 @@ const DESPAWN_DIST = 72;
 const MAX_PASSIVE = 12;
 const MAX_HOSTILE = 10;
 const PANIC_DURATION = 8;
+// 原版生物步高 0.6：床沿 9/16 = 0.5625 正好在以内，走过去该顺势踩上去，
+// 而不是被挡住然后掉头。
+const MOB_STEP_UP = 0.6;
+const MOB_STEP_SAMPLES = 6;
+const MOB_GROUND_TOL = 0.12;
 
 export const MOB_TYPES = {
   pig: { label: '猪', hostile: false, health: 10, speed: 1.5,  w: 0.9, h: 0.9, drops: [{ key: 'porkchop', min: 1, max: 3 }] },
@@ -150,11 +155,14 @@ export class MobManager {
 
   hitsSolid(m, x, y, z) {
     const r = m.halfWidth();
-    const box = {
+    return this.boxBlocked({
       minX: x - r, maxX: x + r,
       minY: y, maxY: y + m.def.h,
       minZ: z - r, maxZ: z + r
-    };
+    });
+  }
+
+  boxBlocked(box) {
     const x0 = Math.floor(box.minX), x1 = Math.floor(box.maxX - 1e-6);
     const z0 = Math.floor(box.minZ), z1 = Math.floor(box.maxZ - 1e-6);
     const y0 = Math.floor(box.minY), y1 = Math.floor(box.maxY - 1e-6);
@@ -173,19 +181,41 @@ export class MobManager {
     return false;
   }
 
+  // 抬腿：把身体往上抬 0.1 / 0.2 / … / 0.6 试一遍，抬起来之后那个方向不撞、
+  // 而且脚底马上有东西接着，就顺势走上去；抬不上去才算真被挡住（否则会顺着墙爬）。
+  mobStepUp(m) {
+    const y0 = m.pos.y;
+    for (let i = 1; i <= MOB_STEP_SAMPLES; i++) {
+      m.pos.y = y0 + (MOB_STEP_UP * i) / MOB_STEP_SAMPLES;
+      if (!this.hitsSolid(m, m.pos.x, m.pos.y, m.pos.z) && this.mobGroundAt(m, m.pos.y)) return true;
+    }
+    m.pos.y = y0;
+    return false;
+  }
+
+  // 脚底往下 MOB_GROUND_TOL 这么一段里有没有东西撑着。
+  mobGroundAt(m, y) {
+    const r = m.halfWidth();
+    return this.boxBlocked({
+      minX: m.pos.x - r, maxX: m.pos.x + r,
+      minY: y - MOB_GROUND_TOL, maxY: y + 1e-4,
+      minZ: m.pos.z - r, maxZ: m.pos.z + r
+    });
+  }
+
   moveAxis(m, axis, amount) {
     if (amount === 0) return true;
     const old = m.pos[axis];
     m.pos[axis] += amount;
-    if (this.hitsSolid(m, m.pos.x, m.pos.y, m.pos.z)) {
-      m.pos[axis] = old;
-      if (axis === 'y') {
-        if (amount < 0) m.onGround = true;
-        m.vel.y = 0;
-      }
-      return false;
+    if (!this.hitsSolid(m, m.pos.x, m.pos.y, m.pos.z)) return true;
+    // 水平方向被挡住时先试抬腿（原版生物步高 0.6）。竖直方向不抬。
+    if (axis !== 'y' && m.onGround && !m.inWater && this.mobStepUp(m)) return true;
+    m.pos[axis] = old;
+    if (axis === 'y') {
+      if (amount < 0) m.onGround = true;
+      m.vel.y = 0;
     }
-    return true;
+    return false;
   }
 
   pickYawToward(m, targetX, targetZ, spread) {
@@ -198,7 +228,8 @@ export class MobManager {
       const a = base + off;
       const nx = m.pos.x + Math.sin(a) * 0.5;
       const nz = m.pos.z + Math.cos(a) * 0.5;
-      if (this.hitsSolid(m, nx, m.pos.y, nz)) continue;
+      // 抬腿（0.6）能迈上去的就不算挡路 —— 床沿 9/16 应该被跨过去，不是绕开。
+      if (this.hitsSolid(m, nx, m.pos.y, nz) && this.hitsSolid(m, nx, m.pos.y + MOB_STEP_UP, nz)) continue;
       const ahead = m.pos.y + m.def.h;
       if (this.isSolidAt(nx, ahead, nz) && this.isSolidAt(nx, ahead + 1, nz)) continue;
       const score = -Math.abs(off);
