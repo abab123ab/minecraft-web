@@ -652,6 +652,62 @@ check('从正上方往下看床垫，法线是 +y（能正确摆在床垫上面�
   rayShape.downId === rayShape.bedId && rayShape.downNy === 1,
   'ny=' + rayShape.downNy);
 
+// ---- C9b 射线兜底：玻璃/冰照样点得中，火把只认那根细条 ----
+//
+// 不满格走判定箱求交后，玻璃和冰（透明但没声明形状）一度直接穿过去了 ——
+// 点不中、挖不掉。没声明形状的方块必须兜底成满格。
+// 火把反过来：原版的点选箱是一根细条，瞄准它旁边的空气不该选中它。
+const rayMisc = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const glassId = m.BLOCK_BY_KEY.glass.id, torchId = m.BLOCK_BY_KEY.torch.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 64;
+  const ax = Math.floor(g.player.pos.x) + 24, az = Math.floor(g.player.pos.z) + 24;
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, stoneId);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+    g.world.setBlock(ax, y + 2, az + dz, 0);
+  }
+  g.world.setBlock(ax, y, az, glassId);
+  g.world.setBlock(ax, y, az + 2, stoneId);
+
+  const glassHit = g.world.raycast({ x: ax + 0.5, y: y + 0.5, z: az - 1.5 }, { x: 0, y: 0, z: 1 }, 8);
+
+  g.world.setBlock(ax, y, az, torchId);
+  const stickHit = g.world.raycast({ x: ax + 0.5, y: y + 0.3, z: az - 1.5 }, { x: 0, y: 0, z: 1 }, 8);
+  const cornerHit = g.world.raycast({ x: ax + 0.15, y: y + 0.1, z: az - 1.5 }, { x: 0, y: 0, z: 1 }, 8);
+
+  const stone = g.world.raycast({ x: ax + 0.5, y: y + 2.5, z: az + 1.5 }, { x: 0, y: -1, z: 0 }, 4);
+
+  g.world.setBlock(ax, y, az, 0);
+  g.world.setBlock(ax, y, az + 2, 0);
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, 0);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+    g.world.setBlock(ax, y + 2, az + dz, 0);
+  }
+  return {
+    glassId, torchId, stoneId,
+    glassHit: glassHit ? { id: glassHit.id, nz: glassHit.nz } : null,
+    stickHit: stickHit ? { id: stickHit.id } : null,
+    cornerId: cornerHit ? cornerHit.id : -1, cornerZ: cornerHit ? cornerHit.z : 99,
+    stonePy: stone ? stone.py : null, wantPy: y, az,
+    stoneDbg: stone ? { id: stone.id, y: stone.y, ny: stone.ny } : null
+  };
+})()`);
+check('玻璃点得中（透明方块没声明形状时射线兜底成满格）',
+  rayMisc.glassHit && rayMisc.glassHit.id === rayMisc.glassId && rayMisc.glassHit.nz === -1,
+  JSON.stringify(rayMisc.glassHit));
+check('瞄准火把中间那条能选中火把', rayMisc.stickHit && rayMisc.stickHit.id === rayMisc.torchId);
+check('瞄准火把格子角落的空气不再选中火把（穿过去打到后面的石头）',
+  rayMisc.cornerId === rayMisc.stoneId && rayMisc.cornerZ === rayMisc.az + 2,
+  'id=' + rayMisc.cornerId + ' z=' + rayMisc.cornerZ);
+check('射线带得出命中点（俯视石头顶面，py 正好落在格子顶）',
+  rayMisc.stonePy !== null && Math.abs(rayMisc.stonePy - rayMisc.wantPy) < 1e-9,
+  'py=' + rayMisc.stonePy + ' 期望 ' + rayMisc.wantPy + ' ' + JSON.stringify(rayMisc.stoneDbg));
+
 // ---- C10 睡觉要认「周围有怪物游荡」 ----
 //
 // 原版：床附近水平 8 格、竖直 3 格内有活的敌对生物，不给睡。

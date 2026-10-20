@@ -95,6 +95,10 @@ def('water', {
 
 def('torch', {
   label: '火把', tiles: ['torch', 'torch', 'torch'],
+  // 原版的点选/选中框是一根细条（不是整格）：[6/16,0,6/16]–[10/16,10/16,10/16]。
+  // 渲染不走这层（mesher 有火把专门的 quad 路径，在盒子分支之前），
+  // 所以这只影响射线选中框和「点不点得到」—— 瞄准它旁边的空气不再把火把选中。
+  boxes: [{ box: [6 / 16, 0, 6 / 16, 10 / 16, 10 / 16, 10 / 16] }],
   hardness: 0.1, tool: null, tier: 0,
   solid: false, opaque: false, transparent: true, drop: 'torch', light: 14, flat: true, sound: 'wood'
 });

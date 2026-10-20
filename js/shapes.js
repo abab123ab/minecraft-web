@@ -141,9 +141,9 @@ function raySlab(o, d, lo, hi, axis, st) {
 }
 
 // 打中返回 { t, axis, nx, ny, nz }（t 从原点算），打空返回 null。
+// 没声明形状的方块按满格算 —— 玻璃、冰就是这种：不透明与否是渲染的事，
+// 射线不该因为它们「透明」就直接穿过去（穿过去的话玻璃就永远点不中、挖不掉了）。
 export function rayHitsBox(ox, oy, oz, dx, dy, dz, maxT, bx, by, bz, id, meta) {
-  const def = BLOCKS[id];
-  if (!def.boxes && !def.collide) return null;
   let bestT = Infinity, bestAxis = -1, bestSign = 0;
   for (const item of blockCollide(id, meta)) {
     const s = item.box;

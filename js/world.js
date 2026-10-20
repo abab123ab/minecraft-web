@@ -8,6 +8,11 @@ import { isFullCube, rayHitsBox } from './shapes.js';
 
 const MAX_LIGHT_ROUNDS = 6;
 
+// 命中点 = 原点 + 方向 × t。放台阶这类要按「点在格子里的哪一半」选朝向的方块要用。
+function hitPoint(origin, dir, t) {
+  return { px: origin.x + dir.x * t, py: origin.y + dir.y * t, pz: origin.z + dir.z * t };
+}
+
 export class World {
   constructor(scene, atlasCanvas, edits) {
     this.scene = scene;
@@ -295,18 +300,20 @@ export class World {
       if (id !== AIR && !BLOCKS[id].liquid) {
         const meta = this.getMeta(x, y, z);
         // 满格方块：进了这一格就撞上，法线就是格子的面。
-        if (isFullCube(id)) return { x, y, z, nx, ny, nz, id, meta };
+        if (isFullCube(id)) return { x, y, z, nx, ny, nz, id, meta, ...hitPoint(origin, dir, t) };
         // 不满格（床 9/16）：射线可能只是从这格上方的空气穿过去，得跟判定箱求交，
         // 打空就不算命中、继续往后走。否则瞄准床垫上方的空气也会选中床。
         const h = rayHitsBox(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z,
-          maxDist - t, x, y, z, id, meta);
+          maxDist, x, y, z, id, meta);
         if (h) {
           return {
             x, y, z, id, meta,
             // 原点已经在盒子里时哪个轴都没进过，退回格子面的法线
             nx: h.axis < 0 ? nx : h.nx,
             ny: h.axis < 0 ? ny : h.ny,
-            nz: h.axis < 0 ? nz : h.nz
+            nz: h.axis < 0 ? nz : h.nz,
+            // h.t 是从原点算的绝对距离，别再加格子的进入距离 t
+            ...hitPoint(origin, dir, h.t)
           };
         }
       }
