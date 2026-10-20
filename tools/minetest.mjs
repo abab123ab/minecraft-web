@@ -94,6 +94,40 @@ check('树叶 drop = null（不掉）', BLOCK_BY_KEY.leaves.drop === null);
 check('树叶有苹果 bonusDrop', !!BLOCK_BY_KEY.leaves.bonusDrop);
 check('石头掉落圆石', BLOCK_BY_KEY.stone.drop === 'cobblestone');
 
+console.log('\n===== 10. 掉落物 5 分钟消失（原版 6000 tick） =====');
+// spawn() 要画布贴图，Node 里没有 —— 直接往 list 里塞一条假记录测 update 逻辑。
+const { DroppedItems } = await import('../js/entities.js');
+const THREE = await import('../js/vendor/three.module.js');
+const stoneId = BLOCK_BY_KEY.stone.id;
+const scene = { add() {}, remove() {} };
+const fakeWorld = { getBlock: (x, y, z) => (y === 9 ? stoneId : 0), getMeta: () => 0 };
+const drops = new DroppedItems(scene, fakeWorld, null);
+const farPlayer = { x: 9999, y: 9999, z: 9999 };
+const inv = { add: (id, n) => n };
+const DT = 1 / 60;
+
+function dropAt() {
+  drops.list.push({
+    id: stoneId, count: 1, dmg: 0,
+    pos: new THREE.Vector3(0.5, 10.12, 0.5), vel: new THREE.Vector3(),
+    age: 0, born: 1, spin: 0, sprite: new THREE.Sprite()
+  });
+}
+dropAt();
+// 真实帧步长跑 299 秒：不掉穿地板（顺带验了「贴着地面休息」这条老路径）
+for (let f = 0; f < 299 * 60; f++) drops.update(DT, farPlayer, inv, null);
+check('299 秒时还在（还没到消失时间）', drops.list.length === 1, 'list=' + drops.list.length);
+check('299 秒内一直贴在石头面上没掉穿', drops.list.length === 1 && Math.abs(drops.list[0].pos.y - 10.12) < 0.01,
+  drops.list.length ? 'y=' + drops.list[0].pos.y.toFixed(3) : '已经没了');
+for (let f = 0; f < 2 * 60; f++) drops.update(DT, farPlayer, inv, null);
+check('301 秒时消失了（原版 5 分钟）', drops.list.length === 0, 'list=' + drops.list.length);
+
+// 对照：没被时间删掉的掉落物，摔出世界照样删（老行为没坏）
+dropAt();
+drops.list[0].pos.y = -30;
+drops.update(DT, farPlayer, inv, null);
+check('摔出世界（y < -20）照样消失', drops.list.length === 0, 'list=' + drops.list.length);
+
 console.log('\n----------------------------------------------');
 console.log('通过 ' + pass + '/' + (pass + fail));
 process.exit(fail === 0 ? 0 : 1);

@@ -8,6 +8,9 @@ const GRAVITY = 24;
 const PICKUP_DELAY = 0.4;
 const PICKUP_RANGE = 1.7;
 const DROP_SIZE = 0.36;
+// 原版掉落物 6000 tick = 5 分钟后消失。之前只有摔出世界（y < -20）才删，
+// 扔在地上的东西会永远留着。
+const DESPAWN_AGE = 300;
 
 export class DroppedItems {
   constructor(scene, world, atlasCanvas) {
@@ -109,7 +112,7 @@ export class DroppedItems {
           }
         }
       }
-      if (p.y < -20) this.remove(i);
+      if (e.age >= DESPAWN_AGE || p.y < -20) this.remove(i);
     }
   }
 
