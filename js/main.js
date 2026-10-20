@@ -614,6 +614,17 @@ class Game {
       return;
     }
     const sy = hit.y + BED_H;
+    // 原版规则：床头附近水平 8 格、竖直 3 格内有活的敌对生物，不给睡。
+    for (const m of this.mobs.list) {
+      if (!m.def.hostile || m.dieT >= 0) continue;
+      const dx = m.pos.x - (hx + 0.5);
+      const dy = m.pos.y - sy;
+      const dz = m.pos.z - (hz + 0.5);
+      if (Math.abs(dx) <= 8 && Math.abs(dz) <= 8 && Math.abs(dy) <= 3) {
+        this.ui.showHint('你现在不能休息，周围有怪物在游荡');
+        return;
+      }
+    }
     this.spawnPoint.set(hx + 0.5, sy, hz + 0.5);
     this.player.pos.set(hx + 0.5, sy, hz + 0.5);
     this.player.vel.set(0, 0, 0);

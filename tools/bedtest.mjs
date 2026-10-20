@@ -652,6 +652,78 @@ check('从正上方往下看床垫，法线是 +y（能正确摆在床垫上面�
   rayShape.downId === rayShape.bedId && rayShape.downNy === 1,
   'ny=' + rayShape.downNy);
 
+// ---- C10 睡觉要认「周围有怪物游荡」 ----
+//
+// 原版：床附近水平 8 格、竖直 3 格内有活的敌对生物，不给睡。
+// 之前只看是不是晚上，僵尸贴脸也能安然入睡。
+const monsterSleep = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const bd = await import('/js/bedshape.js');
+  const bedId = m.BLOCK_BY_KEY.bed.id, stoneId = m.BLOCK_BY_KEY.stone.id;
+  const y = 64;
+  const ax = Math.floor(g.player.pos.x) - 20, az = Math.floor(g.player.pos.z) + 20;
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, stoneId);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+    g.world.setBlock(ax, y + 2, az + dz, 0);
+  }
+  const footMeta = bd.bedMeta(1, false), headMeta = bd.bedMeta(1, true);   // 朝南
+  g.world.setBlock(ax, y, az, bedId, footMeta);
+  g.world.setBlock(ax, y, az + 1, bedId, headMeta);
+  g.timeOfDay = 0.85; g.updateDayNight(0);
+  g.sleeping = false;
+  // 自然界晚上可能自己刷怪，先清空，免得随机刷出来的僵尸把这段干扰掉
+  g.mobs.clear();
+  const backPos = { x: g.player.pos.x, y: g.player.pos.y, z: g.player.pos.z };
+
+  const hit = { x: ax, y, z: az, ny: 1, id: bedId, meta: footMeta };
+  const trySleep = () => { g.trySleep(hit); return g.sleeping; };
+
+  // 1) 猪贴脸：被动生物不影响
+  const pig = g.mobs.spawn('pig', ax + 0.5, y, az - 2.5);
+  const pigOk = trySleep();
+  g.sleeping = false;
+
+  // 2) 僵尸在 3 格外：挡下
+  const zom = g.mobs.spawn('zombie', ax + 0.5, y, az - 2.5);
+  const hintEl = document.getElementById('item-hint');
+  g.timeOfDay = 0.85; g.updateDayNight(0);
+  const beforeZombie = { x: g.spawnPoint.x, y: g.spawnPoint.y, z: g.spawnPoint.z };
+  const nearZombie = trySleep();
+  const hintText = hintEl ? hintEl.textContent : '';
+  const spawnUnchanged = g.spawnPoint.x === beforeZombie.x &&
+    g.spawnPoint.y === beforeZombie.y && g.spawnPoint.z === beforeZombie.z;
+
+  // 3) 僵尸挪到 12 格外：放行
+  zom.pos.set(ax + 0.5, y, az - 11.5);
+  const farZombie = trySleep();
+  g.sleeping = false;
+
+  g.mobs.remove(g.mobs.list.indexOf(zom));
+  g.mobs.remove(g.mobs.list.indexOf(pig));
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, 0);
+    g.world.setBlock(ax, y, az + dz, 0);
+    g.world.setBlock(ax, y + 1, az + dz, 0);
+    g.world.setBlock(ax, y + 2, az + dz, 0);
+  }
+  g.player.pos.set(backPos.x, backPos.y, backPos.z);
+  g.player.vel.set(0, 0, 0);
+  g.player.fallDistance = 0;
+  g.player.lastGroundY = backPos.y;
+  const el = document.getElementById('sleep');
+  if (el) el.classList.remove('on');
+  g.sleeping = false;
+  return { pigOk, nearZombie, farZombie, hintText, spawnUnchanged };
+})()`);
+check('被动生物贴脸不影响睡觉', monsterSleep.pigOk === true);
+check('僵尸在 3 格外游荡时不能睡，重生点也没被改', monsterSleep.nearZombie === false && monsterSleep.spawnUnchanged,
+  'sleeping=' + monsterSleep.nearZombie);
+check('提示语是「周围有怪物在游荡」', monsterSleep.hintText.includes('怪物'), monsterSleep.hintText);
+check('僵尸挪到 8 格以外就能睡了', monsterSleep.farZombie === true);
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;
