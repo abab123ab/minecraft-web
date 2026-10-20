@@ -123,6 +123,25 @@ def('bed', {
   solid: true, opaque: true, transparent: false, cutout: true, drop: 'bed', light: 0, sound: 'wood'
 });
 
+// 橡木台阶：原版半格高（8/16）。meta 0=下半、1=上半，放在哪一半由点击位置决定
+// （见 main.js placeSlab）。cellUV 让侧面贴图按格子位置裁 —— 下半砖只露木板的
+// 下半张，不是把整张竖直压扁。cutout 跟床一个用法：透光、每层扣 1 级。
+const SLAB_BOTTOM = [{ box: [0, 0, 0, 1, 8 / 16, 1], cellUV: true }];
+const SLAB_TOP = [{ box: [0, 8 / 16, 0, 1, 1, 1], cellUV: true }];
+def('oak_slab', {
+  label: '橡木台阶', tiles: ['planks', 'planks', 'planks'],
+  boxes: (meta) => ((meta & 1) ? SLAB_TOP : SLAB_BOTTOM),
+  hardness: 2.0, tool: 'axe', tier: 0,
+  solid: true, opaque: true, transparent: false, cutout: true, drop: 'oak_slab', sound: 'wood'
+});
+// 两个台阶拼成的整砖：看着就是一块满格木板，但挖掉要掉回 2 个台阶（不吞材料）。
+// noItem：它只是「两块台阶」的存档形态，不是能拿在手里的东西。
+def('oak_double_slab', {
+  label: '橡木双层台阶', tiles: ['planks', 'planks', 'planks'],
+  hardness: 2.0, tool: 'axe', tier: 0,
+  drop: 'oak_slab', dropCount: 2, noItem: true, sound: 'wood'
+});
+
 export function isSolid(id) { return BLOCKS[id].solid; }
 export function isLiquid(id) { return BLOCKS[id].liquid; }
 

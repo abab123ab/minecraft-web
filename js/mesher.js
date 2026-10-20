@@ -48,6 +48,15 @@ function rotUV(u, v, r) {
   return [u, v];
 }
 
+// 带 cellUV 的盒子：uv 不铺满盒子面，而是按「盒子在格子里的位置」裁贴图。
+// 比如下半砖的侧面只该露出木板贴图的下半张，而不是把整张竖直压扁。
+// axis 是单位向量（可能带负号），负号表示这条轴上的 u/v 是 1 - 坐标。
+function uvAxisRange(axis, box) {
+  const i = axis[0] !== 0 ? 0 : (axis[1] !== 0 ? 1 : 2);
+  const lo = box[i], hi = box[3 + i];
+  return axis[i] > 0 ? [lo, hi] : [1 - hi, 1 - lo];
+}
+
 export function buildSectionBatches(ch, si, ctx) {
   const grid = [];
   const skyGrid = [];
@@ -202,10 +211,17 @@ export function buildSectionBatches(ch, si, ctx) {
               const aof = 0.55 + 0.15 * ao[v];
               const shade = face.shade * aof;
               const tuv = rotUV(face.uvs[v][0], face.uvs[v][1], rot);
+              let fu = tuv[0], fv = tuv[1];
+              if (item.cellUV) {
+                const ur = uvAxisRange(face.uAxis, box);
+                const vr = uvAxisRange(face.vAxis, box);
+                fu = ur[0] + (ur[1] - ur[0]) * tuv[0];
+                fv = vr[0] + (vr[1] - vr[0]) * tuv[1];
+              }
               target.pos.push(px, py, pz);
               target.uv.push(
-                uvR.u0 + (uvR.u1 - uvR.u0) * tuv[0],
-                uvR.v0 + (uvR.v1 - uvR.v0) * tuv[1]
+                uvR.u0 + (uvR.u1 - uvR.u0) * fu,
+                uvR.v0 + (uvR.v1 - uvR.v0) * fv
               );
               target.col.push(cr * shade, cg * shade, cb * shade);
             }

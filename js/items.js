@@ -26,7 +26,7 @@ function item(key, opts) {
 }
 
 BLOCKS.forEach((b) => {
-  if (b.key === 'air' || b.key === 'water') return;
+  if (b.key === 'air' || b.key === 'water' || b.noItem) return;
   item(b.key, { label: b.label, blockId: b.id, tile: b.tiles ? b.tiles[1] : null });
 });
 

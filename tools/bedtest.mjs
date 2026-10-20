@@ -844,6 +844,128 @@ check('一格高的石墙还是跨不过去（不会顺墙爬）',
   mobStep.wall.maxY < mobStep.y + 0.1 && mobStep.wall.z > mobStep.az + 1.2,
   'maxY=' + mobStep.wall.maxY.toFixed(3) + ' z=' + mobStep.wall.z.toFixed(2));
 
+// ---- C12 橡木台阶：半格高、点哪半放哪半、同类合并成整砖 ----
+//
+// 走真的 useItem()（hitTest 换成塞好的命中结果 —— 要测的是规则，不是瞄准，
+// 瞄准那半截 C9 已经钉死了）。
+const slab = await ev(`(async function(){
+  const g = window.game;
+  const m = await import('/js/blocks.js');
+  const s = await import('/js/shapes.js');
+  const it = await import('/js/items.js');
+  const cf = await import('/js/crafting.js');
+  const slabId = m.BLOCK_BY_KEY.oak_slab.id, doubleId = m.BLOCK_BY_KEY.oak_double_slab.id,
+        stoneId = m.BLOCK_BY_KEY.stone.id;
+  const slabItemId = it.ITEM_BY_KEY.oak_slab.id;
+  const y = 66;
+  const ax = Math.floor(g.player.pos.x) + 32, az = Math.floor(g.player.pos.z) + 32;
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, stoneId);
+    for (let dy = 0; dy <= 3; dy++) g.world.setBlock(ax, y + dy, az + dz, 0);
+  }
+  g.world.setBlock(ax, y, az, stoneId);          // 柱子
+  g.world.setBlock(ax, y + 2, az + 2, stoneId);  // 悬空块（测点底面）
+
+  const slot = g.inventory.selected;
+  const give = (n) => { g.inventory.slots[slot] = { id: slabItemId, count: n, dmg: 0 }; };
+  const held = () => (g.inventory.slots[slot] ? g.inventory.slots[slot].count : 0);
+  const useOn = (hx, hy, hz, nx, ny, nz, py) => {
+    g.hitTest = () => ({
+      x: hx, y: hy, z: hz, nx, ny, nz,
+      id: g.world.getBlock(hx, hy, hz), meta: g.world.getMeta(hx, hy, hz),
+      px: hx + 0.5, py, pz: hz + 0.5
+    });
+    g.useItem();
+  };
+  const at = (cx, cy, cz) => ({ id: g.world.getBlock(cx, cy, cz), meta: g.world.getMeta(cx, cy, cz) });
+
+  // a) 点柱子顶面 → 下半砖
+  give(8); useOn(ax, y, az, 0, 1, 0, y + 1);
+  const a = { ...at(ax, y + 1, az), left: held() };
+  // b) 点悬空块底面 → 上半砖
+  useOn(ax, y + 2, az + 2, 0, -1, 0, y + 2);
+  const b = at(ax, y + 1, az + 2);
+  // c) 点柱子侧面的下半 → 下半砖
+  useOn(ax, y, az, 0, 0, -1, y + 0.3);
+  const c = at(ax, y, az - 1);
+  // d) 点悬空块侧面的上半 → 上半砖
+  useOn(ax, y + 2, az + 2, 0, 0, -1, y + 2.7);
+  const d = at(ax, y + 2, az + 1);
+  // e) 点下半砖侧面的下半：点在「实」的那半 → 不合并，放到隔壁（下半砖）
+  //    得点朝 -z 的那面（法线 0,0,-1），隔壁才是空的 az-2；
+  //    +z 面隔壁是柱子，原版这时候就是放不上。
+  useOn(ax, y, az - 1, 0, 0, -1, y + 0.3);
+  const e2 = at(ax, y, az - 2);
+  // f) 点下半砖侧面的上半：点在「空」的那半 → 合并成整砖
+  useOn(ax, y, az - 1, 0, 0, 1, y + 0.7);
+  const f = { ...at(ax, y, az - 1), left: held() };
+  // g) 点下半砖的顶面 → 合并成整砖
+  useOn(ax, y + 1, az, 0, 1, 0, y + 1.5);
+  const gg = at(ax, y + 1, az);
+  // h) 点上半砖的底面 → 合并成整砖
+  useOn(ax, y + 1, az + 2, 0, -1, 0, y + 1);
+  const h = at(ax, y + 1, az + 2);
+  // i) 挖掉整砖 → 掉 2 个台阶
+  const before = g.dropped.list.filter((x) => x.id === slabItemId).reduce((t, x) => t + x.count, 0);
+  g.breakBlock(ax, y + 1, az);
+  const drops = g.dropped.list.filter((x) => x.id === slabItemId).reduce((t, x) => t + x.count, 0) - before;
+
+  // j) 站上去：下半砖顶面 y+0.5、上半砖顶面 y+1
+  const back = { x: g.player.pos.x, y: g.player.pos.y, z: g.player.pos.z, flying: g.player.flying };
+  const standOn = (cx, cy, cz) => {
+    g.player.flying = false;
+    g.player.pos.set(cx + 0.5, cy + 1.2, cz + 0.5);
+    g.player.vel.set(0, 0, 0);
+    g.player.onGround = false;
+    for (let fr = 0; fr < 40; fr++) g.player.update(1 / 60, {});
+    return g.player.pos.y;
+  };
+  const onBottom = standOn(ax, y, az - 2);       // e) 放的下半砖
+  const onTop = standOn(ax, y + 2, az + 1);      // d) 放的上半砖
+  g.player.pos.set(back.x, back.y, back.z);
+  g.player.vel.set(0, 0, 0);
+  g.player.flying = back.flying;
+  g.player.fallDistance = 0;
+  g.player.lastGroundY = back.y;
+
+  delete g.hitTest;
+  const rec = cf.RECIPES.find((x) => x.resultKey === 'oak_slab');
+
+  // 清场
+  g.inventory.slots[slot] = null;
+  g.world.setBlock(ax, y, az, stoneId);
+  for (let dz = -2; dz <= 3; dz++) {
+    g.world.setBlock(ax, y - 1, az + dz, 0);
+    for (let dy = 0; dy <= 3; dy++) g.world.setBlock(ax, y + dy, az + dz, 0);
+  }
+  return {
+    slabId, doubleId, stoneId, slabItemId, y, ax, az,
+    a, b, c, d, e2, f, gg, h, drops, onBottom, onTop,
+    bottomBox: s.blockBoxes(slabId, 0)[0].box, topBox: s.blockBoxes(slabId, 1)[0].box,
+    slabFull: s.isFullCube(slabId), doubleFull: s.isFullCube(doubleId),
+    doubleItem: !!it.ITEM_BY_KEY.oak_double_slab,
+    recipe: rec ? { count: rec.count, pattern: rec.pattern.join('/') } : null
+  };
+})()`);
+const slabOk = (c, wantId, wantMeta) => c && c.id === wantId && c.meta === wantMeta;
+check('台阶不是满格、整砖是满格', slab.slabFull === false && slab.doubleFull === true);
+check('下半砖盒子 [0,0,0]-[1,0.5,1]、上半砖 [0,0.5,0]-[1,1,1]',
+  slab.bottomBox.join(',') === '0,0,0,1,0.5,1' && slab.topBox.join(',') === '0,0.5,0,1,1,1',
+  slab.bottomBox.join(',') + ' | ' + slab.topBox.join(','));
+check('点顶面放的是下半砖', slabOk(slab.a, slab.slabId, 0) && slab.a.left === 7, JSON.stringify(slab.a));
+check('点底面放的是上半砖', slabOk(slab.b, slab.slabId, 1), JSON.stringify(slab.b));
+check('点侧面的下半放下半砖', slabOk(slab.c, slab.slabId, 0), JSON.stringify(slab.c));
+check('点侧面的上半放上半砖', slabOk(slab.d, slab.slabId, 1), JSON.stringify(slab.d));
+check('点下半砖侧面的下半（实的那半）：不合并，放到隔壁', slabOk(slab.e2, slab.slabId, 0), JSON.stringify(slab.e2));
+check('点下半砖侧面的上半（空的那半）：合并成整砖', slabOk(slab.f, slab.doubleId, 0), JSON.stringify(slab.f));
+check('点下半砖的顶面合并成整砖', slabOk(slab.gg, slab.doubleId, 0), JSON.stringify(slab.gg));
+check('点上半砖的底面合并成整砖', slabOk(slab.h, slab.doubleId, 0), JSON.stringify(slab.h));
+check('整砖挖掉掉回 2 个台阶（不吞材料）', slab.drops === 2, '掉了 ' + slab.drops);
+check('人站在下半砖上顶面正好 0.5', Math.abs(slab.onBottom - (slab.y + 0.5)) < 0.02, 'y=' + slab.onBottom.toFixed(4));
+check('人站在上半砖上顶面正好 1.0', Math.abs(slab.onTop - (slab.y + 3)) < 0.02, 'y=' + slab.onTop.toFixed(4));
+check('3 木板合成 6 个台阶', slab.recipe && slab.recipe.count === 6, JSON.stringify(slab.recipe));
+check('双层台阶不进物品表（只是存档形态）', slab.doubleItem === false);
+
 // ---- D 快进到早上 → 自动醒来 + 遮罩关闭 ----
 const wake = await ev(`(function(){
   const g = window.game;

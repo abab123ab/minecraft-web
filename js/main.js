@@ -1,8 +1,8 @@
 import * as THREE from './vendor/three.module.js';
 import { buildAtlas, ASSET_COUNT, tileUV, TILE_INDEX } from './textures.js';
-import { BLOCKS, AIR, breakTime, canHarvest } from './blocks.js';
+import { BLOCKS, BLOCK_BY_KEY, AIR, breakTime, canHarvest } from './blocks.js';
 import { bedPlaceMeta, bedPartner, bedIsHead, BED_H } from './bedshape.js';
-import { shapeBounds } from './shapes.js';
+import { shapeBounds, boxHitsBlock } from './shapes.js';
 import { ITEMS, ITEM_BY_KEY, FIST_ATTACK } from './items.js';
 import { World } from './world.js';
 import { CHUNK, HEIGHT, SEA } from './worlddef.js';
@@ -552,21 +552,25 @@ class Game {
     if (!item.blockId) return;
     if (this.input.sneak === true && (block.key === 'crafting_table' || block.key === 'furnace')) return;
 
+    // 台阶有自己的一套，而且要先走：点到同类台阶合并成整砖时，
+    // 放的位置就是被点的这一格，不能用「相邻格被占住」那道通用闸把它挡掉。
+    if (item.key === 'oak_slab') { this.placeSlab(hit, item); return; }
+
     const bx = hit.x + hit.nx, by = hit.y + hit.ny, bz = hit.z + hit.nz;
     const cur = this.world.getBlock(bx, by, bz);
     if (cur !== AIR && !BLOCKS[cur].liquid) return;
-    if (this.intersectsPlayer(bx, by, bz)) return;
     if (by < 0 || by >= HEIGHT) return;
     if (item.key === 'torch') {
       if (!BLOCKS[this.world.getBlock(bx, by - 1, bz)].solid) return;
       if (hit.ny !== 1) return;
     }
+    if (this.intersectsPlayer(bx, by, bz, item.blockId, 0)) return;
     // 床占两格：床尾放在点到的这一格，床头放在**远离玩家**的那一格（原版规则，
     // 见 bedPlaceMeta）。两格都得腾得出来，放不下就一格都不放 —— 原版也是这么办的。
     if (BLOCKS[item.blockId].key === 'bed') {
       const at = bedPlaceMeta(this.player.yaw);
       const hx = bx + at.dx, hz = bz + at.dz;
-      if (!this.freeForBlock(hx, by, hz)) {
+      if (!this.freeForBlock(hx, by, hz, item.blockId, at.head)) {
         this.ui.showHint('床要两格地方');
         return;
       }
@@ -585,11 +589,39 @@ class Game {
   }
 
   // 这一格现在腾不腾得出来放方块：得是空气或水，而且不能压在玩家身上。
-  freeForBlock(x, y, z) {
+  freeForBlock(x, y, z, id, meta) {
     if (y < 0 || y >= HEIGHT) return false;
     const cur = this.world.getBlock(x, y, z);
     if (cur !== AIR && !BLOCKS[cur].liquid) return false;
-    return !this.intersectsPlayer(x, y, z);
+    return !this.intersectsPlayer(x, y, z, id, meta);
+  }
+
+  // 台阶放置（原版 SlabBlock 的规则）：
+  // - 点到同类台阶：下半砖点顶面 / 点侧面的上半 → 合并成整砖；上半砖反过来。
+  // - 点到别的方块：顶面放下半、底面放上半、侧面看命中点在格子的哪一半。
+  placeSlab(hit, item) {
+    const slabId = item.blockId;
+    const doubleId = BLOCK_BY_KEY.oak_double_slab.id;
+    const fracY = hit.py - Math.floor(hit.py);
+    if (hit.id === slabId) {
+      const tm = hit.meta || 0;
+      const merge = (tm === 0 && (hit.ny === 1 || (hit.ny === 0 && fracY > 0.5))) ||
+                    (tm === 1 && (hit.ny === -1 || (hit.ny === 0 && fracY < 0.5)));
+      if (merge) {
+        this.world.setBlock(hit.x, hit.y, hit.z, doubleId, 0);
+        this.inventory.consumeHeld(1);
+        this.sfx.place(BLOCKS[doubleId]);
+        this.ui.render();
+        return;
+      }
+    }
+    const meta = hit.ny === 1 ? 0 : (hit.ny === -1 ? 1 : (fracY > 0.5 ? 1 : 0));
+    const bx = hit.x + hit.nx, by = hit.y + hit.ny, bz = hit.z + hit.nz;
+    if (!this.freeForBlock(bx, by, bz, slabId, meta)) return;
+    this.world.setBlock(bx, by, bz, slabId, meta);
+    this.inventory.consumeHeld(1);
+    this.sfx.place(BLOCKS[slabId]);
+    this.ui.render();
   }
 
   trySleep(hit) {
@@ -645,12 +677,20 @@ class Game {
     this.ui.showHint('早上好');
   }
 
-  intersectsPlayer(bx, by, bz) {
+  intersectsPlayer(bx, by, bz, id, meta) {
     const p = this.player;
     const h = P_WIDTH / 2;
-    return (bx + 1 > p.pos.x - h && bx < p.pos.x + h &&
-      by + 1 > p.pos.y && by < p.pos.y + P_HEIGHT &&
-      bz + 1 > p.pos.z - h && bz < p.pos.z + h);
+    const box = {
+      minX: p.pos.x - h, maxX: p.pos.x + h,
+      minY: p.pos.y, maxY: p.pos.y + P_HEIGHT,
+      minZ: p.pos.z - h, maxZ: p.pos.z + h
+    };
+    if (box.maxX <= bx || box.minX >= bx + 1 ||
+        box.maxY <= by || box.minY >= by + 1 ||
+        box.maxZ <= bz || box.minZ >= bz + 1) return false;
+    // 按真实判定箱算，不按整格：台阶只占半格，贴着自己脚边放下半砖
+    // 不该被挡住（原版也是看判定箱，不是看格子）。
+    return boxHitsBlock(box, bx, by, bz, id, meta || 0);
   }
 
   breakBlock(x, y, z) {
