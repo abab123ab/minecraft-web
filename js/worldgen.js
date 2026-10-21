@@ -155,7 +155,12 @@ export function generateChunk(ch) {
       const h = terrainHeight(x, z);
       const bio = biomeAt(x, z);
       surface[lx + CHUNK * lz] = h;
-      const beach = h <= SEA + 1 && bio !== 'desert' && bio !== 'mountains';
+      // 沙滩只是水边那一圈（原版海滩群系贴着水）；真正的水底以砾石为主、
+      // 夹沙子斑块（原版海底就是这样）。以前 h<=SEA+1 全算沙滩，
+      // 十几格深的湖底也是整片沙，雪原的水底甚至会铺上一层雪块。
+      const shore = h >= SEA - 1 && h <= SEA + 1 && bio !== 'desert' && bio !== 'mountains';
+      const under = h < SEA - 1 && bio !== 'desert' && bio !== 'mountains';
+      const seabed = hash2(x, z, 55) < 0.35 ? B.sand : B.gravel;
 
       for (let y = 0; y <= h; y++) {
         let id;
@@ -163,13 +168,15 @@ export function generateChunk(ch) {
         else if (y === h) {
           if (bio === 'desert') id = B.sand;
           else if (bio === 'mountains') id = (h > 52) ? B.snow_block : (h > 44 ? B.stone : B.gravel);
+          else if (under) id = seabed;
           else if (bio === 'snowy') id = B.snow_block;
-          else if (beach) id = B.sand;
+          else if (shore) id = B.sand;
           else id = B.grass;
         } else if (y > h - 4) {
           if (bio === 'desert') id = B.sand;
           else if (bio === 'mountains') id = B.stone;
-          else if (beach) id = B.sand;
+          else if (under) id = seabed;
+          else if (shore) id = B.sand;
           else id = B.dirt;
         } else if (bio === 'desert' && y > h - 8) {
           id = B.sandstone;
@@ -179,8 +186,10 @@ export function generateChunk(ch) {
         data[lx + CHUNK * (lz + CHUNK * y)] = id;
       }
       for (let y = h + 1; y <= SEA; y++) {
-        if (bio === 'snowy' || (bio === 'mountains' && h > 44)) data[lx + CHUNK * (lz + CHUNK * y)] = B.ice;
-        else data[lx + CHUNK * (lz + CHUNK * y)] = B.water;
+        // 结冰只结水面那一层（原版规律），底下还是水 —— 冻成实心冰柱会看不见湖底、
+        // 也没法下水。山地群系要求地表高过海平面 16 格，山地里根本不会有水域，
+        // 不用替它考虑结不结冰。
+        data[lx + CHUNK * (lz + CHUNK * y)] = (y === SEA && bio === 'snowy') ? B.ice : B.water;
       }
     }
   }

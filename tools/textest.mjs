@@ -680,6 +680,45 @@ check('床尾格朝床尾那面一共 3 个（床垫 1 + 两条腿 2）',
 check('床走的是镂空批次（cutout，为了透光；实测 ' + bedMesh.batch + '）',
   bedMesh.batch === 'cutout', String(bedMesh.batch));
 
+// ---- C5 树叶不挡邻居的面（叶隙 X 光透视的回归）----
+//
+// 树叶有洞（镂空），它身后的方块面必须照样建 —— 不然从叶隙看过去会看穿整堵墙
+// 直接看到天。但树叶-树叶之间仍然剔除（一片树冠只建外壳，全建面数会超过整个地形）。
+// 摆法：石头(4,40,4) ← 树叶(4,40,5) ← 树叶(4,40,6)。
+const leafWall = await ev(`(async function(){
+  const { BLOCKS, BLOCK_BY_KEY } = await import('/js/blocks.js');
+  const { buildSectionBatches } = await import('/js/mesher.js');
+  const HEIGHT = 80, CHUNK = 16;
+  const vol = CHUNK * CHUNK * HEIGHT;
+  const ch = {
+    cx: 0, cz: 0,
+    data: new Uint8Array(vol),
+    meta: new Uint8Array(vol),
+    skyLight: new Uint8Array(vol).fill(15),
+    blockLight: new Uint8Array(vol)
+  };
+  const put = (x, y, z, id) => { ch.data[x + CHUNK * (z + CHUNK * y)] = id; };
+  put(4, 40, 4, BLOCK_BY_KEY.stone.id);
+  put(4, 40, 5, BLOCK_BY_KEY.leaves.id);
+  put(4, 40, 6, BLOCK_BY_KEY.leaves.id);
+  const batches = buildSectionBatches(ch, 2, { getChunk: function(){ return ch; }, useAO: false });
+  // 石头朝树叶那一面（z=5 处四个顶点都在 z=5 的四边形）必须还在不透明批次里。
+  const stonePz = batches.opaque.pos.length / 12;   // 石头 6 面全建 = 6 个四边形
+  let atZ5 = 0;
+  for (let q = 0; q * 12 + 11 < batches.opaque.pos.length; q++) {
+    let all = true;
+    for (let k = 0; k < 4; k++) if (Math.abs(batches.opaque.pos[q * 12 + k * 3 + 2] - 5) > 1e-6) all = false;
+    if (all) atZ5++;
+  }
+  // 镂空批次：树叶1 建 4 面（-z 被石头挡、+z 被同种树叶挡），树叶2 建 5 面（-z 被挡），共 9。
+  const cutoutQuads = batches.cutout.pos.length / 12;
+  return { stonePz, atZ5, cutoutQuads };
+})()`);
+check('树叶挡不住身后的墙：石头朝树叶那面照样建（叶隙看过去是墙不是天）',
+  leafWall.atZ5 === 1 && leafWall.stonePz === 6, JSON.stringify(leafWall));
+check('树叶-树叶之间仍然不建面（树冠只建外壳，性能不回退）',
+  leafWall.cutoutQuads === 9, 'cutout 四边形=' + leafWall.cutoutQuads);
+
 // 两对长边贴图都必须真的互为镜像：把 A 第 x 列和 B 第 15-x 列对起来比。
 // 注意镜像这条本身是对称的 —— 把两张图整体调个头它照样过。锁方向的是上面那组
 // bedFace 断言（它规定「u 轴和床头同向的那一面用正图」）。

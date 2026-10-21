@@ -18,6 +18,10 @@ const bedrockByY = new Array(HEIGHT).fill(0);
 const stoneByY = new Array(HEIGHT).fill(0);
 const solidByY = new Array(HEIGHT).fill(0);
 const surfaceHist = new Array(HEIGHT).fill(0);
+// 水底/岸边地表统计：深水底必须砾石或沙（且两种都有），岸边一圈必须是沙。
+const SAND = BLOCKS.findIndex((b) => b.key === 'sand');
+const GRAVEL = BLOCKS.findIndex((b) => b.key === 'gravel');
+let underCols = 0, underBad = 0, uGravel = 0, uSand = 0, shoreCols = 0, shoreBad = 0;
 
 // 矿脉尺寸分布：对每块矿石做连通分量统计（只用 6 邻接、只在区块内）
 const veinSizes = {};
@@ -37,7 +41,22 @@ for (let cz = 0; cz < N; cz++) {
     chunks++;
 
     for (let lz = 0; lz < CHUNK; lz++) {
-      for (let lx = 0; lx < CHUNK; lx++) surfaceHist[ch.surface[lx + CHUNK * lz]]++;
+      for (let lx = 0; lx < CHUNK; lx++) {
+        const h = ch.surface[lx + CHUNK * lz];
+        surfaceHist[h]++;
+        const bio = biomeAt(cx * CHUNK + lx, cz * CHUNK + lz);
+        if (bio === 'desert' || bio === 'mountains') continue;
+        const topId = ch.data[lx + CHUNK * (lz + CHUNK * h)];
+        if (h <= SEA - 2) {
+          underCols++;
+          if (topId === GRAVEL) uGravel++;
+          else if (topId === SAND) uSand++;
+          else underBad++;
+        } else if (h >= SEA - 1 && h <= SEA + 1 && bio !== 'snowy') {
+          shoreCols++;
+          if (topId !== SAND) shoreBad++;
+        }
+      }
     }
 
     for (let y = 0; y < HEIGHT; y++) {
@@ -271,6 +290,48 @@ check(emptyBands.length === 0, '没有「有石头却完全没矿」的层', emp
 const coalPeak = perOre.coal_ore.byY.indexOf(Math.max(...perOre.coal_ore.byY));
 const ironPeak = perOre.iron_ore.byY.indexOf(Math.max(...perOre.iron_ore.byY));
 check(coalPeak > ironPeak, '煤比铁浅（浅矿真的浅）', '煤 y=' + coalPeak + ' > 铁 y=' + ironPeak);
+
+// 结冰只结水面那一层：雪原群系的水域，y=SEA 是冰、往下必须全是水。
+// 以前整根水柱都冻成冰，湖底看不见也下不了水。
+// 注意采样要凑够「深 ≥ 2」的水域列：雪原浅水洼（深 1）占绝大多数，只采前几十个
+// 雪原区块会全是深 1 的 —— 那种列水面以下根本没有格子，断言等于空跑（变异测试抓到过）。
+{
+  const ICE = BLOCKS.findIndex((b) => b.key === 'ice');
+  const WATER = BLOCKS.findIndex((b) => b.key === 'water');
+  let iceAtSea = 0, iceBelow = 0, waterCols = 0, deepCols = 0, scanned = 0;
+  for (let cz = -400; cz <= 400 && deepCols < 20 && scanned < 300; cz++) {
+    for (let cx = -400; cx <= 400 && deepCols < 20 && scanned < 300; cx++) {
+      if (biomeAt(cx * CHUNK + 8, cz * CHUNK + 8) !== 'snowy') continue;
+      scanned++;
+      const ch = { cx, cz, data: new Uint8Array(CHUNK * CHUNK * HEIGHT), surface: new Uint8Array(CHUNK * CHUNK) };
+      generateChunk(ch);
+      for (let lz = 0; lz < CHUNK; lz++) for (let lx = 0; lx < CHUNK; lx++) {
+        const h = ch.surface[lx + CHUNK * lz];
+        if (h >= SEA) continue;   // 只查水域列
+        waterCols++;
+        if (SEA - h >= 2) deepCols++;
+        for (let y = h + 1; y <= SEA; y++) {
+          const id = ch.data[lx + CHUNK * (lz + CHUNK * y)];
+          if (y === SEA && id === ICE) iceAtSea++;
+          if (y < SEA && id === ICE) iceBelow++;
+        }
+      }
+    }
+  }
+  check(waterCols > 0 && deepCols >= 20, '采样到雪原水域、且深 ≥2 的列够数（否则下面两条是空跑）',
+    '扫了 ' + scanned + ' 个雪原区块：水域列 ' + waterCols + '、其中深 ≥2 的 ' + deepCols);
+  check(iceAtSea > 0, '雪原水面结了冰（y=' + SEA + '）', '冰面格数 ' + iceAtSea);
+  check(iceBelow === 0, '冰只有表面一层，水下没有冰柱', '水面以下的冰格数 ' + iceBelow);
+}
+
+// 水底与岸边：深水底以砾石为主夹沙斑（不能有草/雪块沉底），岸边一圈是沙。
+check(underCols > 0, '主采样区有深水域（否则下面几条是空跑）', '水域列 ' + underCols);
+check(underBad === 0, '深水底只有砾石和沙（没有草方块/雪块沉在水底）',
+  '异常列 ' + underBad + '/' + underCols);
+check(uGravel > 0 && uSand > 0, '水底砾石和沙斑两种都有（砾石为主）',
+  '砾石 ' + uGravel + ' / 沙 ' + uSand + '（砾石占 ' + (uGravel / (uGravel + uSand) * 100).toFixed(0) + '%）');
+check(shoreCols > 0 && shoreBad === 0, '岸边一圈是沙滩（平原/森林）',
+  '岸边列 ' + shoreCols + '、异常 ' + shoreBad);
 
 console.log('  ------------------------------------------');
 console.log('  通过 ' + pass + '/' + (pass + fail) + (fail ? '  ← 有失败' : ''));

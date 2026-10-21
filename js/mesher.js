@@ -136,9 +136,13 @@ export function buildSectionBatches(ch, si, ctx) {
             // 邻居得「整格实心」才挡得住这一面 —— 这里不能只看 opaque：床也是不透明的，
             // 但它只有 9/16 高，旁边的石头要是因为「邻居不透明」就整面不建，石头上半截会露出一个洞。
             // 同种方块贴在一起时中间那层也不建面（玻璃除外：玻璃块的边框必须一块一块画出来）。
-            // 树叶算满格实心，所以这里天然走「不建面」这条 —— 一片树冠只有外壳有面。
-            // 把树叶也放进这条例外里试过，树冠内部 6 面全建，镂空面数直接超过整个地形。
-            if (isFullCube(nb) && !(nb === id && block.transparent)) continue;
+            // 镂空方块（树叶）贴在一起时中间也不建面 —— 一片树冠只有外壳有面，
+            // 全建的话树冠内部 6 面全建，镂空面数直接超过整个地形。
+            // 但树叶挡不住**别的**方块的面：叶隙是透的，它背后的墙要是不建面，
+            // 从叶隙看过去会直接看穿整堵墙看到天（X 光透视）。原版 Fancy 画质下
+            // 树叶就是不挡邻居面的。
+            const nbHoles = BLOCKS[nb].cutout && nb !== id;
+            if (isFullCube(nb) && !nbHoles && !(nb === id && block.transparent)) continue;
             if (block.liquid) {
               if (nb === id) continue;
               if (face.dir[1] === -1) continue;
